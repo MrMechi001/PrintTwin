@@ -1,0 +1,22 @@
+name: tests
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Toolpath parser
+        run: python -I tests/test_toolpath.py
+      - name: Bridge end-to-end (simulated printer)
+        run: python -I tests/test_bridge.py

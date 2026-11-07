@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model lab</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #101318; color: #d8dde6; font: 13px/1.4 system-ui, sans-serif; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #info { position: fixed; left: 10px; top: 10px; background: #0009; padding: 8px 10px; border-radius: 6px; max-width: 46ch; white-space: pre-wrap; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info">loading… (click a part; h = hide it, u = unhide all)</div>
+<script type="module">
+// Lab viewer for converted CAD (?f=file.glb&up=y|z): click a part to see its node name + bbox.
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const q = new URLSearchParams(location.search);
+const canvas = document.getElementById('c'), info = document.getElementById('info');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x15181e);
+const pm = new THREE.PMREMGenerator(renderer);
+scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x333333, 0.8));
+const cam = new THREE.PerspectiveCamera(35, 1, 1, 20000);
+const up = q.get('up') || 'y';
+cam.up.set(0, up === 'z' ? 0 : 1, up === 'z' ? 1 : 0);
+const ctl = new OrbitControls(cam, canvas);
+function resize() { renderer.setSize(innerWidth, innerHeight, false); cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); }
+addEventListener('resize', resize); resize();
+
+const root = new THREE.Group();
+scene.add(root);
+const lab = { THREE, scene, cam, ctl, root, renderer, nodes: {} };
+window.lab = lab;
+new GLTFLoader().load(q.get('f') || 'fokieh_raw.glb', (g) => {
+  root.add(g.scene);
+  g.scene.traverse((o) => { if (o.name) lab.nodes[o.name] = o; });
+  lab.fit = (obj = root, dir = [0.55, 0.45, 0.9]) => {
+    const b = new THREE.Box3().setFromObject(obj), c = b.getCenter(new THREE.Vector3()), r = b.getSize(new THREE.Vector3()).length() / 2;
+    ctl.target.copy(c);
+    const d = new THREE.Vector3(...dir).normalize();
+    if (up === 'z') d.set(dir[0], -dir[2], dir[1]).normalize();
+    cam.position.copy(c).addScaledVector(d, r / Math.sin(THREE.MathUtils.degToRad(cam.fov / 2)) * 0.95);
+    ctl.update();
+  };
+  lab.fit();
+  info.textContent = `${Object.keys(lab.nodes).length} nodes – click a part; h = hide it, u = unhide all`;
+  lab.ready = true;
+});
+
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+let picked = null;
+canvas.addEventListener('click', (e) => {
+  mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, cam);
+  const hit = ray.intersectObject(root, true)[0];
+  if (!hit) return;
+  let o = hit.object;
+  while (o.parent && o.parent !== root && !o.name) o = o.parent;
+  picked = o;
+  const b = new THREE.Box3().setFromObject(o);
+  const f = (v) => v.toArray().map((x) => x.toFixed(1)).join(', ');
+  info.textContent = `${o.name}\nmin ${f(b.min)}\nmax ${f(b.max)}\nhit ${f(hit.point)}`;
+});
+addEventListener('keydown', (e) => {
+  if (e.key === 'h' && picked) picked.visible = false;
+  if (e.key === 'u') Object.values(lab.nodes).forEach((o) => { o.visible = true; });
+});
+renderer.setAnimationLoop(() => { ctl.update(); renderer.render(scene, cam); });
+</script>
+</body>
+</html>

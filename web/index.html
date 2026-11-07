@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PrintTwin</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<section id="hud" aria-live="polite">
+  <header>
+    <span id="state" class="chip">…</span>
+    <span id="pname">PrintTwin</span>
+  </header>
+  <div id="file" class="file">Connecting…</div>
+  <div class="bar"><div id="bar"></div></div>
+  <div class="row big">
+    <span id="pct">–</span>
+    <span id="eta" class="muted">–</span>
+  </div>
+  <div class="row">
+    <span id="layer">Layer –</span>
+    <span id="z" class="muted">Z –</span>
+  </div>
+  <div class="row temps">
+    <span>Nozzle <b id="tn">–</b></span>
+    <span>Bed <b id="tb">–</b></span>
+  </div>
+  <div class="row live"><span id="live" class="dot"></span><span id="livetxt">No live data</span></div>
+  <div id="loading" hidden></div>
+</section>
+
+<section id="legend" hidden></section>
+
+<nav id="tools">
+  <button id="bColor" type="button" aria-pressed="false" title="Colour by feature type or filament colour">Features</button>
+  <button id="bGhost" type="button" aria-pressed="true" title="Show what is still to be printed">Preview</button>
+  <button id="bFollow" type="button" aria-pressed="false" title="Camera follows the nozzle">Follow</button>
+  <button id="bFit" type="button" title="Frame the view">Fit</button>
+  <button id="bPrinter" type="button" aria-pressed="false" title="Show the whole printer: moving bed, gantry and extruder">Printer</button>
+  <button id="bPhone" type="button" title="Open this view on your phone">Phone</button>
+</nav>
+
+<dialog id="phone" aria-labelledby="phoneTitle">
+  <h2 id="phoneTitle">Open on your phone</h2>
+  <p class="muted">Phone on the same Wi-Fi: scan the code with the camera.</p>
+  <div id="qr"></div>
+  <ul id="urls"></ul>
+  <button id="phoneClose" type="button">Close</button>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

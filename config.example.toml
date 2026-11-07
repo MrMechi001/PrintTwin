@@ -1,0 +1,19 @@
+# Copy to config.local.toml and fill in. config.local.toml is git-ignored.
+# One [[printer]] block per printer.
+
+[[printer]]
+id = "mk4"                      # short id, used in URLs: /?p=mk4
+name = "Prusa MK4"
+kind = "prusalink"              # Prusa MK4/MK4S/MK3.9/Core One/XL/MINI with PrusaLink
+host = "192.168.x.y"            # printer IP (also used to match its UDP metrics)
+api_key = "PRUSALINK-API-KEY"   # printer: Settings > Network > PrusaLink
+
+[server]
+listen_host = "0.0.0.0"         # 0.0.0.0 = reachable from other devices on the LAN/Tailscale
+port = 8790
+
+[metrics]
+# Printer side: Settings > Network > Metrics & Log
+#   host = this PC's IP, port = listen_port, enable pos_x / pos_y / pos_z in the Metrics List
+listen_host = "0.0.0.0"
+listen_port = 8514

@@ -1,0 +1,10 @@
+config.local.toml
+pyenv/
+cache/
+incoming/
+logs/
+cad_src/
+web/lab/*.glb
+tests/private/
+__pycache__/
+*.pyc
