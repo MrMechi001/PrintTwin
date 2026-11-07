@@ -44,18 +44,19 @@ come with a similar simulator or recorded fixture so CI can test it without hard
 
 ## Add a printer model for the *Printer* view
 
-Models are GLB files in `web/models/` with four groups – `static`, `bed` (G-code bed
-coordinates, slides in Y), `xaxis` (moves in Z) and `carriage` (moves in X) – plus
-anchors in `extras.printtwin` (see `tools/cad/build_mk4.py`). CoreXY printers (moving bed
-in Z, head in X/Y) will need a second layout; open an issue first so we can agree on it.
-Models must come from sources whose licence allows redistribution (e.g. GPL, CC BY,
-CC BY-SA) and must not contain manufacturer logos.
+Models are GLB files in `web/models/` named after the model key (`printtwin/models.py`,
+`web/printers.js`) with four groups – `static`, `bed` (G-code bed coordinates, slides in Y),
+`xaxis` (moves in Z) and `carriage` (moves in X) – plus anchors in `extras.printtwin`
+(see `tools/cad/build_mk4.py`). CoreXY printers set `extras.printtwin.kinematics = "corexy"`
+and use `bed` (moves in Z), `gantry` (moves in Y) and `carriage` (moves in X).
+`tests/test_glb_models.py` checks the structure. Models must come from sources whose licence
+allows redistribution (e.g. GPL, CC BY, CC BY-SA) and must not contain manufacturer logos.
 
 ## Development
 
 * Python 3.11+, **standard library only** for the bridge (no `pip install` for users).
-* Tests: `python -I tests/test_toolpath.py` and `python -I tests/test_bridge.py`
-  (CI runs them on Windows and Linux, Python 3.11–3.13).
+* Tests: `python -I tests/test_toolpath.py`, `tests/test_models.py`, `tests/test_glb_models.py`
+  and `tests/test_bridge.py` (CI runs them on Windows and Linux, Python 3.11–3.13).
 * Try changes without a printer: `python -I tools/sim_printer.py tests/fixtures/sample.bgcode`
   → <http://localhost:8791/>.
 * Keep pull requests focused; describe what you tested (printer, firmware, slicer).

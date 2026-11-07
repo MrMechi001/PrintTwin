@@ -18,11 +18,16 @@ PrintTwin started on the Original Prusa MK4 – **support for more printers is i
 | Printer | Connection | Status |
 |---|---|---|
 | **Original Prusa MK4** | PrusaLink + firmware metrics | ✅ tested (firmware 8.0), true-to-size 3D model |
-| Prusa MK4S, MK3.9 / MK3.9S, CORE One / CORE One L, XL, MINI / MINI+ | PrusaLink + firmware metrics | 🧪 should work today (same firmware family) – **testers wanted**; for now the *Printer* view shows the MK4 model |
+| **Original Prusa MK4S** | PrusaLink + firmware metrics | 🧪 should work today (same firmware) – **testers wanted**; true-to-size 3D model |
+| Original Prusa MK3.9 / MK3.9S | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; shown as the MK4 / MK4S (approximate) |
+| Prusa CORE One / CORE One L, XL, MINI / MINI+ | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY / bed-slinger model until their own is done |
 | Klipper printers (Voron, Ender/Creality with Klipper, Sovol, Elegoo …) | Moonraker | 🛠️ in development |
 | OctoPrint printers (Prusa MK3S/MK3S+, Ender 3 …) | OctoPrint API | 📋 planned |
 | Bambu Lab (X1, P1, A1) | MQTT on the local network | 📋 planned |
-| Printer models for the *Printer* view: MK4S, CORE One, generic bed-slinger / CoreXY | – | 🛠️ in development |
+| True-to-size models for the *Printer* view: MINI, CORE One, CORE One L, XL | – | 🛠️ in development |
+
+PrintTwin asks the printer which model it is (PrusaLink), so the *Printer* view picks the
+right one by itself; `model = "mk4s"` in the config overrides it.
 
 Have one of these printers? A short test report helps a lot – see
 [CONTRIBUTING.md](CONTRIBUTING.md#test-printtwin-with-your-printer). PrintTwin is an
@@ -32,7 +37,7 @@ independent project, not affiliated with Prusa Research.
 
 * **Live, not a guess**: follows the printer's own nozzle position (~80 Hz) and file
   position, so the view matches the real print to the extrusion line.
-* **The whole printer** (button *Printer*): a true-to-size MK4 built from Prusa's CAD parts –
+* **The whole printer** (button *Printer*): a true-to-size MK4 or MK4S built from Prusa's CAD parts –
   the bed slides, the X gantry rides the Z screws, the Nextruder moves, the spool unwinds,
   the heater glows with the nozzle temperature, the display shows the live status.
 * **Fast**: the model appears seconds after a print starts – PrusaSlicer can hand PrintTwin
@@ -123,23 +128,29 @@ Fallbacks: file position only → fixed planner lag; no metrics → PrusaLink's 
 (layer-exact). The HUD warns ("file position off") if the printer's file and PrintTwin's
 copy disagree.
 
-### The MK4 model
+### The MK4 and MK4S models
 
-Prusa publishes the CAD of every printed part (STEP, GPL-2.0) but no complete MK4.
-`tools/cad/build_mk4.py` builds `web/models/mk4.glb` from:
+Prusa publishes the CAD of every printed part (STEP, GPL-2.0) but no complete MK4 or MK4S.
+`tools/cad/build_mk4.py [mk4|mk4s]` builds `web/models/mk4.glb` / `mk4s.glb` from:
 
 * **FokieH's MK4 assembly** ([Printables 961911](https://www.printables.com/model/961911), GPL-2.0)
   – its printed parts are verified against Prusa's official files (identical volumes);
 * **Prusa's MK4 printable parts** ([Printables 451501](https://www.printables.com/model/451501), GPL-2.0)
   – each part is located in the assembly (< 0.01 mm); their NEMA17 hole patterns place
-  the motors; the Nextruder main plate is added;
+  the motors; the Nextruder main plate and idler are added;
+* **Prusa's MK4S printable parts** ([Printables 451500](https://www.printables.com/model/451500), GPL-2.0)
+  – the MK4S Nextruder: print-fan case and cover at the front, 360° fan shroud, fan-door
+  cover, heatsink spacer; plus the MK4S LoveBoard cover and Y belt holders. Where these
+  parts sit was found by registering each one on Marcus_3D's MK4S model
+  ([Printables 1030417](https://www.printables.com/model/1030417), GPL-2.0) – within 1 mm
+  everywhere; that mesh is only a reference, the model is built from Prusa's own files;
 * parts generated from official dimensions: MK52 heatbed (254 × 264.4 mm), steel sheet
-  (252 × 241 mm), spacers, bearings, belts, nozzle and heater block.
+  (252 × 241 mm), spacers, bearings, belts, nozzle and heater block, fan rotors.
 
 Calibrated to the G-code frame (X travel centred between the X-ends, sheet 10.4 mm above
 the Y-carriage → the source model's nozzle sits exactly at the firmware's Z max of 221 mm).
-Rebuilding it needs CadQuery and the two Printables downloads in `cad_src/`; using it
-needs nothing. `web/lab/model.html?f=../models/mk4.glb&up=z` inspects it part by part.
+Rebuilding needs CadQuery and the Printables downloads in `cad_src/`; using the models
+needs nothing. `web/lab/model.html?f=../models/mk4s.glb&up=z` inspects one part by part.
 
 ## Development
 
@@ -147,7 +158,8 @@ Contributions welcome – especially test reports from other printers and new pr
 adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 * `python -I tests/test_toolpath.py` – parser: `.gcode` == `.bgcode`, other slicers,
-  incremental decoding; `python -I tests/test_bridge.py` – end-to-end with a simulated printer.
+  incremental decoding; `python -I tests/test_bridge.py` – end-to-end with a simulated printer;
+  `tests/test_models.py` – printer detection; `tests/test_glb_models.py` – the 3D printer models.
 * `python -I tools/sim_printer.py JOB.bgcode --kbps 18 [--handover]` – a fake PrusaLink
   printer plus the bridge on port 8791: try PrintTwin without a printer.
 * `tools/probe_api.py`, `tools/probe_metrics.py` – inspect a real printer
@@ -158,8 +170,8 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **More printers** (in the works – see [Supported printers](#supported-printers))
 * Klipper / Moonraker, OctoPrint and Bambu Lab adapters next to PrusaLink.
-* Printer models for the *Printer* view: MK4S, CORE One, and generic bed-slinger / CoreXY
-  models for everything else.
+* True-to-size models for the *Printer* view: MINI, CORE One, CORE One L and XL next
+  (MK4 and MK4S are done); generic bed-slinger / CoreXY models for everything else.
 
 **Inside your slicer**
 * PrintTwin right in **PrusaSlicer** and **OrcaSlicer**: both can already show a printer's
@@ -179,8 +191,8 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licence
 
-PrintTwin is free software under the **GNU GPL v3** (`LICENSE`). The MK4 model
-`web/models/mk4.glb` is a GPL-2.0 derivative of FokieH's and Prusa Research's work –
+PrintTwin is free software under the **GNU GPL v3** (`LICENSE`). The printer models
+`web/models/mk4.glb` and `mk4s.glb` are GPL-2.0 derivatives of FokieH's and Prusa Research's work –
 see `web/models/NOTICE.md`. Uses [three.js](https://threejs.org) (MIT) and
 [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT).
 "Prusa" and "Original Prusa" are trademarks of Prusa Research a.s.; PrintTwin is an

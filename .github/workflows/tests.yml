@@ -20,5 +20,7 @@ jobs:
         run: python -I tests/test_toolpath.py
       - name: Printer model detection
         run: python -I tests/test_models.py
+      - name: Printer 3D models (GLB structure)
+        run: python -I tests/test_glb_models.py
       - name: Bridge end-to-end (simulated printer)
         run: python -I tests/test_bridge.py

@@ -2,9 +2,18 @@
 
 ## In development
 
-* More printers: Klipper (Moonraker), OctoPrint and Bambu Lab adapters; printer models for
-  MK4S, CORE One and generic bed-slinger / CoreXY machines. Other PrusaLink printers
-  (MK4S, MK3.9, CORE One, XL, MINI) should already work – test reports welcome.
+* **True-to-size Original Prusa MK4S** in the *Printer* view: the new Nextruder (front
+  print-fan case, 360° shroud, fan-door cover) from Prusa's MK4S parts, black Z parts.
+  MK3.9 / MK3.9S are shown as the MK4 / MK4S (approximate).
+* MK4 model: Nextruder idler (swivels, nut, lever) and hotend-fan rotor added.
+* The printer model is detected from the printer itself (PrusaLink type code), then the job
+  file; `model = "…"` in the config overrides it. Generic bed-slinger / CoreXY models for
+  printers without their own model yet.
+* A second PrintTwin no longer shares the port with a running one (Windows): it says
+  "already running" and opens the browser.
+* More printers: Klipper (Moonraker), OctoPrint and Bambu Lab adapters; true-to-size MINI,
+  CORE One, CORE One L and XL. Other PrusaLink printers (MK3.9, CORE One, XL, MINI) should
+  already work – test reports welcome.
 * PrintTwin inside PrusaSlicer / OrcaSlicer (as a print host shown in the slicer's printer tab).
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.

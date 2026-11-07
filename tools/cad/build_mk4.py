@@ -1,4 +1,4 @@
-"""Build web/models/mk4.glb: a true-to-size, animatable Original Prusa MK4.
+"""Build web/models/mk4.glb or mk4s.glb: a true-to-size, animatable Original Prusa MK4 / MK4S.
 
 Geometry
   * FokieH, "Prusa MK4 Model" (Printables 961911, GPL-2.0): complete MK4 assembly whose
@@ -6,9 +6,15 @@ Geometry
     It is a merged CATIA part without names/colours: bodies are identified below by index and
     verified by volume.
   * Prusa Research, "MK4/MK3.9 printable parts" (Printables 451501, GPL-2.0): used to locate
-    the motor mounts (NEMA17 hole patterns) and to add the Nextruder main plate.
+    the motor mounts (NEMA17 hole patterns) and to add the Nextruder main plate and idler.
+  * MK4S: Prusa Research, "MK4S/MK3.9S printable parts" (Printables 451500, GPL-2.0): the new
+    Nextruder print-fan case + cover, 360-degree fan shroud, fan-door cover, heatsink spacer,
+    LoveBoard cover r3 and Y belt holders r3. Their poses (and the idler's) were found by
+    registering each STEP part on Marcus_3D's "Prusa MK4S Model for PrusaSlicer" (Printables
+    1030417, GPL-2.0) - see LOCATED below; that mesh is a reference only, nothing of it is used.
   * Added here from datasheet / official dimensions: motors, heatbed MK52 + steel sheet,
-    spacers, linear bearings, belts, nozzle + heater block, LCD knob / reset button.
+    spacers, linear bearings, belts, nozzle + heater block, LCD knob / reset button, MK4S
+    print-fan impeller.
 
 Frames
   FokieH: mm, X right, Y up, Z towards the front.  Output (= PrintTwin G-code frame): mm,
@@ -19,10 +25,10 @@ Frames
     xaxis     X gantry, local z relative to the nozzle: viewer sets position.z = Z
       carriage  extruder, local x relative to the nozzle: viewer sets position.x = X
 
-usage:  python -I tools/cad/build_mk4.py
+usage:  python -I tools/cad/build_mk4.py [mk4|mk4s]       (default mk4)
         (a Python with CadQuery 2.x / OCP 7.7+ and numpy, e.g. `pip install cadquery`;
-         the viewer itself needs none of this - the built GLB is in the repo)
-sources: put the two Printables downloads into cad_src/ (see the paths below).
+         the viewer itself needs none of this - the built GLBs are in the repo)
+sources: put the Printables downloads into cad_src/ (see the paths below).
 """
 from __future__ import annotations
 
@@ -45,7 +51,8 @@ from OCP.TopExp import TopExp_Explorer  # noqa: E402
 
 FOKIEH = ROOT / "cad_src/fokieh/MK4-COMPLETE_withSpoolHolder_20240913.stp"
 PRUSA = ROOT / "cad_src/prusa_mk4_parts/extracted"
-OUT = ROOT / "web/models/mk4.glb"
+PRUSA_S = ROOT / "cad_src/prusa_mk4s_parts/extracted"
+VARIANTS = ("mk4", "mk4s")
 
 # ----------------------------------------------------------------------------- calibration
 # Nozzle tip in FokieH (lowest point of the hotend body; the X axis sits at the top of Z travel).
@@ -158,6 +165,78 @@ SOLIDS = {
 SPOOL_HOLDER_SHELL = 199                      # the only closed surface body; the others are Nextruder details
 
 
+# ----------------------------------------------------------------------------- parts FokieH lacks + MK4S parts
+# Poses in the FokieH frame (p' = R p + t, R rows). Found by registering each Prusa STEP part (ICP
+# over random starts) on Marcus_3D's MK4S mesh (Printables 1030417, GPL-2.0, assembled from Prusa's
+# MK4S parts), which was aligned to FokieH through four carriage parts both contain (ICP rms 0.33 mm;
+# the Nextruder main plate then lands within 0.25 mm of its MK4 pose). Every listed part's surface
+# lies within 1 mm of the reference (MK4S parts: >= 82 % within 0.5 mm); rotations snapped.
+_A = float(np.sqrt(0.5))
+_C130, _S130 = float(np.cos(np.radians(130.0))), float(np.sin(np.radians(130.0)))
+LOCATED = {
+    # Nextruder idler (MK4 and MK4S, identical parts; FokieH has none): (name, file, material, R, t)
+    "idler": [
+        ("idler-nut", "Nextruder/idler-nut-r2.stp", "petg", [[0, 1, 0], [-1, 0, 0], [0, 0, 1]], [118.83, 418.87, 278.93]),
+        ("idler-swivel-front", "Nextruder/idler-swivel-R2.stp", "petg", [[1, 0, 0], [0, -1, 0], [0, 0, -1]],
+         [107.43, 418.84, 287.03]),
+        ("idler-swivel-back", "Nextruder/idler-swivel-R2.stp", "petg", [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+         [107.44, 418.83, 270.81]),
+        ("idler-lever-a", "Nextruder/idler-lever-a-r2.stp", "petg", [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+         [124.75, 380.85, 283.64]),
+        ("idler-lever-b", "Nextruder/idler-lever-b-r2.stp", "petg", [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+         [124.76, 380.83, 273.93]),
+    ],
+    # MK4S Nextruder: print-fan blower case at the front (45 deg), 360-degree shroud, fan-door cover
+    "mk4s": [
+        ("fan-case", "Nextruder/fan-case-r2.stp", "pccf", [[-1, 0, 0], [0, _A, _A], [0, _A, -_A]], [146.28, 351.55, 323.68]),
+        ("fan-case-cover", "Nextruder/fan-case-cover_r1.stp", "pccf", [[-1, 0, 0], [0, -_A, -_A], [0, -_A, _A]],
+         [142.79, 394.33, 360.78]),
+        ("fan-shroud", "Nextruder/fan-shroud-mk4s_r1.stp", "pccf", [[-1, 0, 0], [0, _A, -_A], [0, -_A, -_A]],
+         [194.81, 319.62, 288.74]),
+        ("fan-door-cover", "Nextruder/fan-door-cover_r1.stp", "petg", [[_C130, 0, _S130], [0, 1, 0], [-_S130, 0, _C130]],
+         [112.63, 344.42, 294.62]),
+        ("heatsink-spacer", "Nextruder/heatsink-spacer-r1.stp", "pccf", [[0, 0, -1], [-1, 0, 0], [0, 1, 0]],
+         [140.47, 354.35, 273.45]),
+    ],
+}
+# MK4S parts that replace an MK4 body in the same design frame: body -> (MK4 part, MK4S part)
+MK4S_SWAPS = {
+    33: ("Nextruder/LoveBoard-cover-R2.stp", "Nextruder/lb-cover-back_r3.stp"),
+    24: ("Y-carriage & Heatbed/y-belt-holder-tensioner-r2.stp", "Y-carriage & Heatbed/y-belt-holder-tensioner-r3.stp"),
+    25: ("Y-carriage & Heatbed/y-belt-holder-r2.stp", "Y-carriage & Heatbed/y-belt-holder_r3.stp"),
+}
+# FokieH's Nextruder detail surfaces are mostly the MK4's left fan door + print-fan area, which the MK4S
+# does not have; these are the ones the MK4S reference also contains (>= 50 % of their area within 0.8 mm)
+MK4S_KEEP_SHELLS = {5, 10, 33, 34, 35, 36, 37, 38, 39, 40, 41, 112, 148, 160, 162, 164, 165, 166, 168, 169, 174, 175}
+
+
+def impeller():
+    """MK4S print-fan impeller in the fan-case frame (chamber r 20.5 around (-0.25, 0.03), floor z -20, cover z 0)."""
+    hub = cq.Workplane("XY").workplane(offset=-19).circle(12.5).extrude(18).faces(">Z").edges().fillet(1.0)
+    blades = []
+    for k in range(30):
+        a = 2 * np.pi * k / 30
+        blades.append(cq.Workplane("XY").workplane(offset=-18.5).center(15.8, 0).rect(7.4, 0.9).extrude(17)
+                      .rotate((0, 0, 0), (0, 0, 1), float(np.degrees(a)) + 0.0)
+                      .rotate((15.8 * np.cos(a), 15.8 * np.sin(a), 0), (15.8 * np.cos(a), 15.8 * np.sin(a), 1), 25))
+    w = hub
+    for b in blades:
+        w = w.add(b)
+    return w.translate((-0.25, 0.03, 0))
+
+
+def fan_rotor(r_hub=9.8, r_tip=18.6, height=7.0, blades=7, pitch=32.0):
+    """Axial fan rotor (40 mm class), axis = local z, from z 0 to `height`."""
+    w = cq.Workplane("XY").circle(r_hub).extrude(height).faces(">Z").edges().fillet(1.2)
+    rm, L = (r_hub + r_tip) / 2, r_tip - r_hub + 0.6
+    for k in range(blades):
+        a = 360.0 * k / blades
+        b = (cq.Workplane("XY").box(L, 9.0, 0.9).rotate((0, 0, 0), (1, 0, 0), pitch)
+             .translate((rm, 0, height / 2)).rotate((0, 0, 0), (0, 0, 1), a))
+        w = w.add(b)
+    return w
+
+
 # ----------------------------------------------------------------------------- generated parts
 def mesh_of(shape, defl=0.08):
     if isinstance(shape, cq.Workplane):
@@ -206,7 +285,11 @@ def belt_loop(c0, c1, pitch_dia, width=6.0, thick=1.4):
     return outer.cut(inner).translate(((c0[0] + c1[0]) / 2, (c0[1] + c1[1]) / 2, -width / 2))
 
 
-def main():
+def main(variant="mk4"):
+    if variant not in VARIANTS:
+        sys.exit(f"unknown variant {variant!r} (choose from {', '.join(VARIANTS)})")
+    mk4s = variant == "mk4s"
+    out = ROOT / f"web/models/{variant}.glb"
     t0 = time.time()
     fk = read_step(FOKIEH)
     solids, shells = [], []
@@ -234,11 +317,27 @@ def main():
     lo_box = cq.Solid.makeBox(60, 18.0, 60, cq.Vector(NOZ[0] - 30, NOZ[1] - 1, NOZ[2] - 30))
     solids[43] = cq.Shape.cast(solids[43]).cut(lo_box).wrapped
 
-    for i, spec in SOLIDS.items():
-        if spec:
-            parts.append((spec[0], spec[1], spec[2], tessellate(solids[i], 0.06, 0.3)))
+    specs = dict(SOLIDS)
+    if mk4s:
+        for i in (8, 9, 10, 11):            # MK4S: black Z-axis parts (X-ends and clips stay orange)
+            specs[i] = specs[i][:2] + ("petg",) + specs[i][3:]
+        specs[32] = None                     # MK4 fan shroud -> MK4S 360-degree shroud (LOCATED)
+    for i, spec in specs.items():
+        if not spec:
+            continue
+        if mk4s and i in MK4S_SWAPS:          # newer revision of the part, designed in the same frame
+            old, new = MK4S_SWAPS[i]
+            R, t, err = placement(read_step(PRUSA / old), solids[i])
+            sh = read_step(PRUSA_S / new)
+            b0, b1 = bbox(solids[i]), bbox(sh) @ R.T + t
+            if np.abs(np.sort(b1, axis=0) - b0).max() > 4.0:
+                sys.exit(f"{new}: does not replace body {i} in place")
+            parts.append((spec[0], spec[1], spec[2], place(tessellate(sh, 0.06, 0.3), R, t)))
+            continue
+        parts.append((spec[0], spec[1], spec[2], tessellate(solids[i], 0.06, 0.3)))
     parts.append(("spool-holder", "static", "petg", tessellate(shells[SPOOL_HOLDER_SHELL], 0.1, 0.35)))
-    details = [tessellate(s, 0.05, 0.3) for k, s in enumerate(shells) if k != SPOOL_HOLDER_SHELL]
+    details = [tessellate(s, 0.05, 0.3) for k, s in enumerate(shells)
+               if k != SPOOL_HOLDER_SHELL and (not mk4s or k in MK4S_KEEP_SHELLS)]
     details = [d for d in details if d]
     if details:
         off, P, N, I = 0, [], [], []
@@ -254,6 +353,22 @@ def main():
     parts.append(("main-plate", "carriage", "pccf", place(mp, R, t)))
     e_face = R @ np.array([0, 0, 19.1]) + t            # extruder motor sits behind the main plate,
     e_dir = R @ np.array([0, 0, -1.0])                 # shaft pointing forward into the gearbox
+
+    # hotend fan: FokieH's body 42 is the 40 x 40 frame only -> add a rotor in its opening (blows backwards)
+    fb = bbox(solids[42])
+    fc = (fb[0] + fb[1]) / 2
+    parts.append(("hotend-fan-rotor", "carriage", "fan",
+                  place(mesh_of(fan_rotor(), 0.05), np.eye(3), np.array([fc[0], fc[1], fb[0][2] + 1.6]))))
+
+    # idler (both) and the MK4S Nextruder parts, at the poses found on the MK4S reference
+    for group, src in (("idler", PRUSA),) + ((("mk4s", PRUSA_S),) if mk4s else ()):
+        for name, f, mat, R, t in LOCATED[group]:
+            R = np.array(R, float)
+            u, _, vt = np.linalg.svd(R)                # exact rotation
+            R = u @ vt
+            parts.append((name, "carriage", mat, place(tessellate(read_step(src / f), 0.05, 0.3), R, np.array(t, float))))
+            if name == "fan-case":
+                parts.append(("print-fan", "carriage", "fan", place(mesh_of(impeller(), 0.05), R, np.array(t, float))))
 
     # ---------------------------------------------------------------- motors (positions from the parts' NEMA17 patterns)
     motors = [
@@ -370,21 +485,27 @@ def main():
             "cable_start_carriage": (to_frame(np.array([[NOZ[0] - 30, 395.0, 246.0]]), "carriage")[0]).round(2).tolist(),
             "cable_end_static": model_to_static([-8.7, 198.0, 214.0]).round(2).tolist(),
             "bounds": [lo.round(1).tolist(), hi.round(1).tolist()],
+            "model": variant,
             "sources": [
                 "FokieH, 'Prusa MK4 Model', printables.com/model/961911, GPL-2.0",
                 "Prusa Research, 'MK4/MK3.9 printable parts', printables.com/model/451501, GPL-2.0",
+            ] + ([
+                "Prusa Research, 'MK4S/MK3.9S printable parts', printables.com/model/451500, GPL-2.0",
+            ] if mk4s else []) + [
+                "part poses (idler" + (", MK4S Nextruder" if mk4s else "") + ") located on Marcus_3D, "
+                "'Prusa MK4S Model for PrusaSlicer', printables.com/model/1030417, GPL-2.0 (reference only)",
                 "motors, bed, sheet, belts, bearings, nozzle: PrintTwin tools/cad/build_mk4.py (GPL-2.0)",
             ],
         }
     }
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    size = w.write(OUT, extras)
-    gz = gzip.compress(OUT.read_bytes(), 6)
-    OUT.with_name(OUT.name + ".gz").write_bytes(gz)
-    print(f"wrote {OUT}: {size / 1e6:.1f} MB ({len(gz) / 1e6:.1f} MB gz), {ntri:,} triangles, "
+    out.parent.mkdir(parents=True, exist_ok=True)
+    size = w.write(out, extras)
+    gz = gzip.compress(out.read_bytes(), 6)
+    out.with_name(out.name + ".gz").write_bytes(gz)
+    print(f"wrote {out}: {size / 1e6:.1f} MB ({len(gz) / 1e6:.1f} MB gz), {ntri:,} triangles, "
           f"{len(parts) + len(bedparts)} parts in {time.time() - t0:.0f} s")
     print("pose of the source model (G-code):", extras["printtwin"]["pose"], "static bounds:", extras["printtwin"]["bounds"])
 
 
 if __name__ == "__main__":
-    main()
+    main(*sys.argv[1:2])

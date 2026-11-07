@@ -38,7 +38,7 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
       if (o.isMesh) { o.castShadow = o.receiveShadow = false; mats[o.material.name] = o.material; }
     });
   }
-  // variants share one GLB: e.g. MK4S = MK4 with black Z parts
+  // variants share one GLB: e.g. MK3.9S = MK4S with orange Z parts
   for (const [name, matName] of Object.entries(recolor)) {
     const o = find(name);
     if (o?.isMesh && mats[matName]) o.material = mats[matName];

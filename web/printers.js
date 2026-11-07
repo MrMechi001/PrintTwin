@@ -3,18 +3,22 @@
 // true-to-size model doesn't exist yet.
 //   glb:        a CAD model in web/models/ (printer_glb.js), optional recolor {node: material}
 //   procedural: 'bedslinger' (printer3d.js) or 'corexy' (printer_corexy.js), sized by `volume`
-const ORANGE_Z = ['z-top-left', 'z-top-right', 'z-bottom-left', 'z-bottom-right'];
-const black = (names) => Object.fromEntries(names.map((n) => [n, 'petg']));
+const Z_PARTS = ['z-top-left', 'z-top-right', 'z-bottom-left', 'z-bottom-right'];
+const paint = (names, mat) => Object.fromEntries(names.map((n) => [n, mat]));
 
 export const MODELS = {
   mk4:   { label: 'Original Prusa MK4', glb: 'models/mk4.glb' },
-  // MK4S: same frame and axes as the MK4; Z parts are black, only the X-ends stay orange.
-  // Until its own model exists (new Nextruder fan housing) it is the MK4 model recoloured.
+  // MK4S: MK4 frame and axes, new Nextruder (front print-fan case, 360-degree shroud, fan-door
+  // cover); Z parts black, only the X-ends stay orange. Older bridges without mk4s.glb: MK4 recoloured.
   mk4s:  { label: 'Original Prusa MK4S', glb: 'models/mk4s.glb', fallback: 'mk4s_interim' },
-  mk4s_interim: { label: 'Original Prusa MK4S', glb: 'models/mk4.glb', recolor: black(ORANGE_Z), approx: true },
+  mk4s_interim: { label: 'Original Prusa MK4S', glb: 'models/mk4.glb', recolor: paint(Z_PARTS, 'petg'), approx: true },
+  // MK3.9 / MK3.9S: an MK3S+ upgraded with the MK4 / MK4S Nextruder and electronics. Shown as the
+  // MK4 / MK4S with the MK3S+'s orange Z parts until an MK3S+ frame model exists.
   mk39:  { label: 'Original Prusa MK3.9', glb: 'models/mk39.glb', fallback: 'mk39_interim' },
   mk39_interim: { label: 'Original Prusa MK3.9', glb: 'models/mk4.glb', approx: true },
-  mk39s: { label: 'Original Prusa MK3.9S', glb: 'models/mk39s.glb', fallback: 'mk4s_interim' },
+  mk39s: { label: 'Original Prusa MK3.9S', glb: 'models/mk39s.glb', fallback: 'mk39s_interim' },
+  mk39s_interim: { label: 'Original Prusa MK3.9S', glb: 'models/mk4s.glb', recolor: paint(Z_PARTS, 'orange'),
+                   approx: true, fallback: 'mk4s_interim' },
   coreone:  { label: 'Prusa CORE One', glb: 'models/coreone.glb', fallback: 'corexy', volume: { bed: [250, 220], height: 270 } },
   coreonel: { label: 'Prusa CORE One L', glb: 'models/coreonel.glb', fallback: 'corexy', volume: { bed: [300, 300], height: 330 } },
   xl:    { label: 'Original Prusa XL', glb: 'models/xl.glb', fallback: 'corexy', volume: { bed: [360, 360], height: 360 } },
