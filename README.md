@@ -21,7 +21,8 @@ PrintTwin started on the Original Prusa MK4 – **support for more printers is i
 | **Original Prusa MK4S** | PrusaLink + firmware metrics | 🧪 should work today (same firmware) – **testers wanted**; true-to-size 3D model |
 | Original Prusa MK3.9 / MK3.9S | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; shown as the MK4 / MK4S (approximate) |
 | Original Prusa MINI / MINI+ | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; true-to-size 3D model |
-| Prusa CORE One / CORE One L, XL | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY model until their own is done |
+| Original Prusa XL | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; 3D model with Prusa's parts, frame estimated (approximate) |
+| Prusa CORE One / CORE One L | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY model until their own is done |
 | Klipper printers (Voron, Ender/Creality with Klipper, Sovol, Elegoo …) | Moonraker | 🛠️ in development |
 | OctoPrint printers (Prusa MK3S/MK3S+, Ender 3 …) | OctoPrint API | 📋 planned |
 | Bambu Lab (X1, P1, A1) | MQTT on the local network | 📋 planned |
@@ -42,6 +43,10 @@ independent project, not affiliated with Prusa Research.
   Prusa's CAD parts – the bed slides, the X axis rides up and down, the print head moves,
   the spool unwinds, the display shows the live status, the MK4's heater glows with the
   nozzle temperature.
+* **Multi-material**: jobs with several tools (XL) or filaments (MMU) are drawn in each
+  filament's colour; the XL shows all its heads (up to five, from the printer model in the
+  job) with a spool per head – three on the left side, two on the right – parks the idle
+  heads in their docks and picks up the active one at every tool change.
 * **Fast**: the model appears seconds after a print starts – PrusaSlicer can hand PrintTwin
   a copy of every sliced file, and otherwise the file is shown while it downloads.
 * **Any slicer**: `.bgcode` and `.gcode` from PrusaSlicer, OrcaSlicer, Bambu Studio,
@@ -170,6 +175,19 @@ their rods; at Z max 185 the carriage stops 2.5 mm under the top. The extruder r
 PTFE bowden runs to the hotend, and the spool stands on the printed spool holder behind
 the column.
 
+### The XL model (approximate)
+
+`tools/cad/build_xl.py` builds `web/models/xl.glb` (CoreXY, one to five tools). There is no
+published XL assembly, so it combines Prusa's
+[XL printable parts](https://www.printables.com/model/449554) (GPL-2.0), the Nextruder of the
+MK4 model, the firmware's geometry (360 × 360 × 370 mm, stops, tool docks at Y 455) and
+PrusaSlicer's XL bed. The frame is measured on Prusa's dimension photo (front and side view,
+perspective-corrected with the 365 mm sheet as scale): 504 mm wide base, top side beams
+overhanging front and back, Z-axis posts with the LED strips 160 mm behind the base front,
+the heads standing above the frame. The filament runs from the side spools back and up to
+the entry sensors, then through the cable bundle that arcs over the frame onto the head.
+The viewer marks the XL *approximate* until real measurements or Prusa's CAD refine it.
+
 ## Development
 
 Contributions welcome – especially test reports from other printers and new printer
@@ -211,7 +229,8 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 PrintTwin is free software under the **GNU GPL v3** (`LICENSE`). The printer models
 `web/models/mk4.glb` and `mk4s.glb` are GPL-2.0 derivatives of FokieH's and Prusa Research's work,
-`mini.glb` is a GPL-3.0 derivative of Prusa Research's MINI files – see `web/models/NOTICE.md`. Uses [three.js](https://threejs.org) (MIT) and
+`mini.glb` is a GPL-3.0 derivative of Prusa Research's MINI files, `xl.glb` a GPL-2.0 derivative of
+Prusa's XL parts – see `web/models/NOTICE.md`. Uses [three.js](https://threejs.org) (MIT) and
 [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT).
 "Prusa" and "Original Prusa" are trademarks of Prusa Research a.s.; PrintTwin is an
 independent project.

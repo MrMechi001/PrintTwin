@@ -69,6 +69,7 @@ class Toolpath:
     line_starts: array = field(default_factory=lambda: array("I"))   # every line, for sync checks
     layer_z: list = field(default_factory=list)
     layer_start: list = field(default_factory=list)
+    tool_changes: list = field(default_factory=list)   # [segment index, tool] at every T<n> (XL tools, MMU filaments)
     meta: dict = field(default_factory=dict)
     text_size: int = 0
     complete: bool = False      # False while the job file is still arriving
@@ -127,7 +128,7 @@ class Toolpath:
     def info(self) -> dict:
         n = self.count
         bb = self.bbox()
-        return {
+        out = {
             "count": n,
             "complete": self.complete,
             "rewritten": self.rewritten,
@@ -135,8 +136,22 @@ class Toolpath:
             "bbox": bb,
             "types": TYPES,
             "types_present": sorted(self._types),
+            "tool_changes": [[s, t] for s, t in self.tool_changes if s <= n],
             **self.meta,
         }
+        if "filament_colour" in self.meta and "filament_colours" not in self.meta:
+            out.update(_filaments(self.meta))
+        return out
+
+
+def _filaments(meta: dict) -> dict:
+    """filament_colour / filament_type are ';'-separated, one entry per tool (or MMU filament)."""
+    cols = [c.strip().strip('"') for c in str(meta.get("filament_colour", "")).split(";")]
+    cols = [c if re.fullmatch(r"#[0-9A-Fa-f]{6}", c) else "#FF8000" for c in cols] or ["#FF8000"]
+    out = {"filament_colours": cols, "filament_colour": cols[0]}
+    if meta.get("filament_type"):
+        out["filament_types"] = [t.strip().strip('"') for t in str(meta["filament_type"]).split(";")]
+    return out
 
 
 def _type_id(name: bytes) -> int:
@@ -284,6 +299,14 @@ class GcodeParser:
                     abs_e = True
                 elif raw.startswith(b"M83"):
                     abs_e = False
+            elif c == 84 and len(raw) > 1 and 48 <= raw[1] <= 57:   # 'T<n>': tool / filament change
+                j = 1
+                while j < len(raw) and 48 <= raw[j] <= 57:
+                    j += 1
+                tool = int(raw[1:j])
+                if tool != s.get("tool", -1):
+                    s["tool"] = tool
+                    tp.tool_changes.append((len(ty), tool))
 
         self._offset = offset
         s.update(x=x, y=y, z=z, abs_xyz=abs_xyz, abs_e=abs_e, e_abs_last=e_abs_last,
@@ -394,7 +417,7 @@ class JobDecoder:
             self._buf = bytearray()
         self._parser.finish()
         if "filament_colour" in meta:
-            meta["filament_colour"] = meta["filament_colour"].split(";")[0].strip('"') or "#FF8000"
+            meta.update(_filaments(meta))
         return tp
 
     # ------------------------------------------------------------------ bgcode blocks

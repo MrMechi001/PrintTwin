@@ -166,5 +166,15 @@ tr.feed_sdpos(dec.tp.line_starts[len(dec.tp.line_starts) // 2])
 tr.feed_sdpos(last + 12345)
 check("sync ignores positions beyond the loaded part", tr.sync() == {"ok": 1.0, "n": 1} and tr.ahead(), str(tr.sync()))
 
+# 8) multi-tool / multi-filament: T<n> changes per segment, one colour and type per tool
+mt = b"M83\nT0\nG1 X0 Y0 Z0.2\nG1 X10 E1\nG1 Y10 E1\nT1 S1 L0 D0\nG1 X0 E1\nM104 T1 S200\nG1 Y0 E1\nT0\nG1 X5 Y5 E1\n" \
+     b"; filament_colour = #FF0000;#00FF00;#0000FF\n; filament_type = PLA;PETG;PLA\n"
+dec = JobDecoder()
+dec.feed(mt)
+inf = dec.finish().info()
+check("tool changes per segment (M104 T1 is no change)", inf["tool_changes"] == [[0, 0], [2, 1], [4, 0]], str(inf["tool_changes"]))
+check("filament colours / types per tool", inf["filament_colours"] == ["#FF0000", "#00FF00", "#0000FF"]
+      and inf["filament_colour"] == "#FF0000" and inf["filament_types"] == ["PLA", "PETG", "PLA"], str(inf.get("filament_colours")))
+
 print("\nall passed" if not failures else f"\n{failures} FAILED")
 sys.exit(1 if failures else 0)

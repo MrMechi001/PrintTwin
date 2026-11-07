@@ -127,6 +127,7 @@ const uniforms = {
   uCum,
   uColors: { value: TYPE_COLORS.map((c) => new THREE.Color(c)) },
   uFil: { value: new THREE.Color('#ff8000') },
+  uTools: { value: Array.from({ length: 8 }, () => new THREE.Color('#ff8000')) },   // filament colour per tool
   uColorMode: { value: 0 },
 };
 
@@ -136,11 +137,12 @@ attribute vec3 aEnd;
 attribute vec2 aWH;
 attribute float aType;
 attribute float aCum;       // extruded path length (mm) at segment start
+attribute float aTool;      // tool / filament (T<n>) that prints the segment
 uniform float uCount;
 uniform float uCum;         // extruded path length at the nozzle
 uniform float uGhost;
 uniform vec3 uColors[16];
-uniform vec3 uFil;
+uniform vec3 uTools[8];
 uniform float uColorMode;
 varying vec3 vN;
 varying vec3 vW;
@@ -170,7 +172,7 @@ void main() {
   vW = n;
   vP = p;
   vN = normalize(normalMatrix * n);
-  vCol = mix(uColors[int(aType + 0.5)], uFil, uColorMode);
+  vCol = mix(uColors[int(aType + 0.5)], uTools[int(min(aTool, 7.0) + 0.5)], uColorMode);
   // freshly extruded plastic glows over the last ~80 mm of path behind the nozzle
   vHot = uGhost < 0.5 ? clamp(1.0 - (uCum - (aCum + position.x * L)) / 80.0, 0.0, 1.0) : 0.0;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
@@ -239,7 +241,7 @@ async function fetchSegments(from) {
 function makeGeometry(cap) {
   const arr = {
     s: new Float32Array(3 * cap), e: new Float32Array(3 * cap), wh: new Float32Array(2 * cap),
-    t: new Uint8Array(cap), c: new Float32Array(cap),
+    t: new Uint8Array(cap), c: new Float32Array(cap), tool: new Uint8Array(cap),
   };
   const geo = new THREE.InstancedBufferGeometry();
   geo.index = box.index;
@@ -250,6 +252,7 @@ function makeGeometry(cap) {
   geo.setAttribute('aWH', new THREE.InstancedBufferAttribute(arr.wh, 2));
   geo.setAttribute('aType', new THREE.InstancedBufferAttribute(arr.t, 1));
   geo.setAttribute('aCum', new THREE.InstancedBufferAttribute(arr.c, 1));   // path length at segment start (glow trail)
+  geo.setAttribute('aTool', new THREE.InstancedBufferAttribute(arr.tool, 1));
   geo.instanceCount = 0;
   return { geo, arr };
 }
@@ -262,6 +265,7 @@ function appendSegments(chunk) {
     const g = makeGeometry(cap);
     g.arr.s.set(tp.arr.s.subarray(0, 3 * n)); g.arr.e.set(tp.arr.e.subarray(0, 3 * n));
     g.arr.wh.set(tp.arr.wh.subarray(0, 2 * n)); g.arr.t.set(tp.arr.t.subarray(0, n)); g.arr.c.set(tp.arr.c.subarray(0, n));
+    g.arr.tool.set(tp.arr.tool.subarray(0, n));
     const cum = new Float64Array(cap + 1); cum.set(tp.cum.subarray(0, n + 1));
     const segLen = new Float32Array(cap); segLen.set(tp.segLen.subarray(0, n));
     tp.geo.dispose();
@@ -284,6 +288,48 @@ function appendSegments(chunk) {
   for (const name of ['aStart', 'aEnd', 'aWH', 'aType', 'aCum']) tp.geo.attributes[name].needsUpdate = true;
   tp.n = n + M;
   tp.geo.instanceCount = tp.n;
+  fillTools(n);
+}
+
+// tools the printer has, from the slicer's printer model: XL5IS / XLP5T -> 5, XL2IS -> 2, XLIS -> 1
+function printerTools(info) {
+  const m = /^XLP?(\d)?(?:IS|T)?/i.exec(info?.printer_model || '');
+  return m ? Number(m[1] || 1) : 1;
+}
+
+// tools (XL) / filaments (MMU) the job uses
+function toolsInJob(info) {
+  const t = [...new Set((info?.tool_changes || []).map((c) => c[1]))].sort((a, b) => a - b);
+  return t.length ? t : [0];
+}
+
+// tool / filament per segment from the T<n> changes in the toolpath info
+function toolAt(i) {
+  const ch = tp?.info?.tool_changes;
+  if (!ch?.length) return 0;
+  let lo = 0, hi = ch.length - 1, t = ch[0][0] <= i ? ch[0][1] : 0;
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1;
+    if (ch[m][0] <= i) { t = ch[m][1]; lo = m + 1; } else hi = m - 1;
+  }
+  return t;
+}
+
+function fillTools(from = 0) {
+  const ch = tp?.info?.tool_changes || [];
+  const a = tp.arr.tool, n = tp.n;
+  if (from >= n) return;
+  let t = toolAt(from), j = ch.findIndex((c) => c[0] > from);
+  if (j < 0) j = ch.length;
+  for (let i = from; i < n;) {
+    const next = j < ch.length ? Math.min(ch[j][0], n) : n;
+    a.fill(Math.min(t, 7), i, next);
+    i = next;
+    if (j < ch.length) t = ch[j++][1];
+  }
+  const attr = tp.geo.attributes.aTool;
+  attr.addUpdateRange(from, n - from);
+  attr.needsUpdate = true;
 }
 
 function applyInfo(info) {
@@ -294,6 +340,16 @@ function applyInfo(info) {
   if (info.filament_colour && info.filament_colour !== prev?.filament_colour) {
     uniforms.uFil.value.set(info.filament_colour);
     if (printer) printer.setFilament(info.filament_colour, 0);
+  }
+  const cols = info.filament_colours || (info.filament_colour ? [info.filament_colour] : null);
+  const prevCols = prev?.filament_colours || (prev?.filament_colour ? [prev.filament_colour] : null);
+  if (cols && String(cols) !== String(prevCols)) {
+    uniforms.uTools.value.forEach((c, i) => c.set(cols[Math.min(i, cols.length - 1)]));
+    printer?.setTools?.(cols, toolsInJob(info), printerTools(info));
+  }
+  if (String(info.tool_changes) !== String(prev?.tool_changes)) {
+    fillTools(0);
+    printer?.setTools?.(cols || ['#ff8000'], toolsInJob(info), printerTools(info));
   }
   if (info.bed_shape !== prev?.bed_shape) buildBed(info.bed_shape);
   if (String(info.types_present) !== String(prev?.types_present)) buildLegend();
@@ -455,6 +511,7 @@ function ensurePrinter(key = wantedModel()) {
     bedGroup.add(p.bedParts);
     p.root.visible = p.bedParts.visible = printerMode;
     if (tp?.info.filament_colour) p.setFilament(tp.info.filament_colour, 0);
+    if (tp?.info) p.setTools?.(tp.info.filament_colours || [tp.info.filament_colour || '#ff8000'], toolsInJob(tp.info), printerTools(tp.info));
     printer = p;
     printerKey = key;
     printerInfo = res;
@@ -707,7 +764,10 @@ function frame(now) {
     printer.setFans(state?.fan_hotend || 0);
     printer.setHeat(state?.temps?.nozzle);
     printer.setLcd(state);
-    if (tp) printer.setFilament(null, Math.min(uCum.value, tp.cum[tp.n]));
+    if (tp) {
+      printer.setFilament(null, Math.min(uCum.value, tp.cum[tp.n]));
+      printer.setActiveTool?.(toolAt(Math.min(Math.floor(uCount.value), Math.max(tp.n - 1, 0))));
+    }
     printer.tick(dt / 1000);
     if (follow && pose) {
       printer.nozzleWorld(tmpV).sub(controls.target).multiplyScalar(0.06);

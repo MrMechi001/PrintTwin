@@ -9,6 +9,14 @@
 * **True-to-size Original Prusa MINI+** in the *Printer* view, from Prusa's MINI STEP parts
   and drawings: the extruder rides on the Z carriage, a PTFE bowden runs to the hotend, the
   portrait LCD shows the live status, the spool sits on the printed spool holder.
+* **Original Prusa XL** in the *Printer* view (approximate): CoreXY gantry, bed lowering in Z,
+  Prusa's XL parts and the Nextruder on a frame measured from Prusa's dimension photo;
+  filament from the side spools through the entry sensors and the cable bundle onto the head.
+* **Multi-material**: tool / filament changes (`T<n>`) and all filament colours are read from
+  the job; the print is coloured per filament, and the XL shows all its heads (up to five, from
+  the printer model, e.g. XL5IS) with a spool per head (three left, two right, smooth PTFE
+  tubes from the sensor blocks), parks the idle heads in their docks and switches the active
+  one at every tool change.
 * The printer model is detected from the printer itself (PrusaLink type code), then the job
   file; `model = "…"` in the config overrides it. Generic bed-slinger / CoreXY models for
   printers without their own model yet.

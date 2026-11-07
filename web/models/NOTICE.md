@@ -46,5 +46,18 @@ Printables models into `cad_src/` (see the script's header) and run it.
 
 Source: unzip Prusa's repository into `cad_src/prusa_mini/extracted/` and run the script.
 
+## xl.glb
+
+`xl.glb` (and `xl.glb.gz`) is a derivative work, licensed **GNU GPL v2.0**. Built by
+`tools/cad/build_xl.py` from:
+
+* **Prusa Research, "XL printable parts"** – https://www.printables.com/model/449554 – GPL-2.0:
+  x-carriage, y-carriages, xLCD cover and knob, Z bearing housings, bed controller case,
+  telescopic spool holder.
+* The Nextruder of `mk4.glb` (sources above, GPL-2.0).
+* PrintTwin (`tools/cad/build_xl.py`, GPL-2.0): frame, panels, rails, belts, motors, heatbed
+  tiles and frame, steel sheet (outline measured from PrusaSlicer's `xl_bed.stl`). The frame is
+  estimated – no XL assembly has been published.
+
 "Prusa", "Original Prusa" and the Prusa logo are trademarks of Prusa Research a.s.; these
 models are for visualising the user's own printer and are not endorsed by Prusa Research.

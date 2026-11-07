@@ -21,7 +21,8 @@ export const MODELS = {
                    approx: true, fallback: 'mk4s_interim' },
   coreone:  { label: 'Prusa CORE One', glb: 'models/coreone.glb', fallback: 'corexy', volume: { bed: [250, 220], height: 270 } },
   coreonel: { label: 'Prusa CORE One L', glb: 'models/coreonel.glb', fallback: 'corexy', volume: { bed: [300, 300], height: 330 } },
-  xl:    { label: 'Original Prusa XL', glb: 'models/xl.glb', fallback: 'corexy', volume: { bed: [360, 360], height: 360 } },
+  // XL: Prusa's printed parts, frame estimated (no published XL assembly yet) -> marked approximate
+  xl:    { label: 'Original Prusa XL', glb: 'models/xl.glb', approx: true, fallback: 'corexy', volume: { bed: [360, 360], height: 360 } },
   mini:  { label: 'Original Prusa MINI+', glb: 'models/mini.glb', fallback: 'bedslinger', volume: { bed: [180, 180], height: 180 } },
   bedslinger: { label: 'Generic bed-slinger', procedural: 'bedslinger', generic: true },
   corexy:     { label: 'Generic CoreXY', procedural: 'corexy', generic: true },
