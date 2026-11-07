@@ -413,39 +413,72 @@ function makeFloor(z = -111.6, center = [125, 100]) {
   return g;
 }
 
-function ensurePrinter() {
-  if (printer) return Promise.resolve(printer);
-  printerLoading ??= (async () => {
-    const { RoomEnvironment } = await import('three/addons/environments/RoomEnvironment.js');
-    let p;
-    try {
-      // true-to-size MK4 from CAD (web/models/mk4.glb); the simple procedural printer is the fallback
-      p = await (await import('./printer_mk4.js')).buildPrinter();
-    } catch (e) {
-      console.warn('MK4 CAD model unavailable, using the simple printer', e);
-      const m = await import('./printer3d.js');
-      p = m.buildPrinter();
-      p.NOZZLE_Y = m.NOZZLE_Y;
-    }
+// The model follows what the bridge detected (state.model: from the job file, the printer's
+// type code or the config); web/printers.js maps it to a CAD model or a generic fallback.
+let printerKey = null, printerInfo = null;
+const wantedModel = () => state?.model || 'bedslinger';
+
+function jobVolume() {
+  const s = tp?.info?.bed_shape;
+  if (!s) return undefined;
+  const p = s.split(',').map((q) => q.split('x').map(Number));
+  if (!p.every((q) => q.length === 2 && q.every(Number.isFinite))) return undefined;
+  const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+  return { bed: [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)], height: 250 };
+}
+
+function ensurePrinter(key = wantedModel()) {
+  if (printer && printerKey === key) return Promise.resolve(printer);
+  if (printerLoading && printerLoading.key === key) return printerLoading;
+  const job = (async () => {
+    const [{ RoomEnvironment }, { loadPrinter, MODELS }] = await Promise.all([
+      import('three/addons/environments/RoomEnvironment.js'), import('./printers.js')]);
+    const res = await loadPrinter(key, { volume: MODELS[key]?.volume ? undefined : jobVolume() });
+    if (printerLoading !== job) return printer;              // superseded by another model meanwhile
+    const p = res.printer;
     const b = p.bounds;
     p.root.add(makeFloor(p.floorZ ?? -111.6, [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2]));
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
+    if (!envTex) {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+    }
+    if (printer) {                                          // replace the previous model
+      scene.remove(printer.root);
+      bedGroup.remove(printer.bedParts);
+    }
     scene.add(p.root);
     bedGroup.add(p.bedParts);
+    p.root.visible = p.bedParts.visible = printerMode;
     if (tp?.info.filament_colour) p.setFilament(tp.info.filament_colour, 0);
     printer = p;
+    printerKey = key;
+    printerInfo = res;
+    showModelLabel();
+    if (printerMode) fit();
     return p;
   })();
-  return printerLoading;
+  job.key = key;
+  printerLoading = job;
+  job.catch(() => {}).then(() => { if (printerLoading === job) printerLoading = null; });
+  return job;
+}
+
+function showModelLabel() {
+  const el = $('model');
+  if (!el) return;
+  el.hidden = !(printerMode && printerInfo);
+  if (printerInfo) {
+    el.textContent = `${printerInfo.label}${printerInfo.approx ? ' · approximate model' : ''}`;
+    el.title = printerInfo.approx ? 'A true-to-size model of this printer is in the works' : 'True-to-size model';
+  }
 }
 
 async function setPrinterMode(on) {
   printerMode = on;
   bPrinter.setAttribute('aria-pressed', String(on));
-  if (on) {
-    try { await ensurePrinter(); } catch (e) { console.warn('printer model failed', e); printerMode = false; }
+  if (on && state) {                                         // without state yet, onState loads it
+    try { await ensurePrinter(); } catch (e) { console.warn('printer model failed', e); }
   }
   if (printer) {
     printer.root.visible = printerMode;
@@ -455,6 +488,7 @@ async function setPrinterMode(on) {
   scene.environmentIntensity = 0.75;
   if (bed) bed.visible = !printerMode;
   if (!printerMode) bedGroup.position.set(0, 0, 0);
+  showModelLabel();
   fit();
 }
 
@@ -533,6 +567,11 @@ function onState(s) {
     if (loadingKey !== s.toolpath_key) loadToolpath(s.toolpath_key);
   } else if (tp && !loadingKey && (s.toolpath_count > tp.n || (s.toolpath_complete && !tp.complete))) {
     growToolpath();
+  }
+
+  // printer model: load it once the first state arrives, swap it when the detection changes
+  if (printerMode && wantedModel() !== printerKey && printerLoading?.key !== wantedModel()) {
+    ensurePrinter().catch((e) => console.warn('printer model failed', e));
   }
 }
 
@@ -657,8 +696,8 @@ function frame(now) {
     }
     if (!pose && nz) pose = nz;
     if (pose) {
-      bedGroup.position.y = printer.NOZZLE_Y - pose[1];
-      printer.setPose(pose[0], pose[2]);
+      printer.setPose(pose[0], pose[1], pose[2]);
+      printer.bedOffset(pose[0], pose[1], pose[2], bedGroup.position);   // bed-slinger: Y, CoreXY: Z
     }
     printer.setFans(state?.fan_hotend || 0);
     printer.setHeat(state?.temps?.nozzle);
@@ -695,7 +734,7 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 // debugging handle for the browser console
-window.printtwin = { THREE, renderer, scene, camera, controls, uniforms, get tp() { return tp; }, get state() { return state; } };
+window.printtwin = { THREE, renderer, scene, camera, controls, uniforms, get tp() { return tp; }, get state() { return state; }, get printer() { return printer; } };
 
 // ------------------------------------------------------------------ connect
 async function init() {

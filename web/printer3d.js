@@ -1,4 +1,5 @@
-// Procedural MK4-style bed-slinger, driven by the live nozzle position.
+// Procedural generic bed-slinger (MK4-like), driven by the live nozzle position.
+// Fallback for bed-slinger printers without a CAD model; interface: see printer_glb.js.
 // World = G-code frame (mm, Z up). The nozzle stays in the plane y = NOZZLE_Y;
 // the bed (and the print on it) slides in Y underneath it, the X axis rides in Z,
 // the extruder carriage moves along X.
@@ -231,7 +232,7 @@ export function buildPrinter() {
   let fanAngle = 0, fanRps = 0, spoolTurns = 0;
   const pose = { x: 125, z: 50 };
 
-  function setPose(x, z) {
+  function setPose(x, y, z) {
     pose.x = x; pose.z = z;
     xAxis.position.z = z;
     carriage.position.x = x;
@@ -245,7 +246,7 @@ export function buildPrinter() {
     filTop.set(x, NOZZLE_Y - 6, z + 144);
     place(strand, filSpool, filTop, 0.9);
   }
-  setPose(pose.x, pose.z);
+  setPose(pose.x, 0, pose.z);
 
   function setFans(hotendRpm) {
     fanRps = hotendRpm > 0 ? 2 + Math.min(hotendRpm, 9000) / 1500 : 0;
@@ -295,8 +296,10 @@ export function buildPrinter() {
   }
 
   return {
-    root, bedParts, setPose, setFans, setFilament, setHeat, setLcd, tick,
+    root, bedParts, setPose, setFans, setFilament, setHeat, setLcd, tick, NOZZLE_Y, kinematics: 'bedslinger',
+    bedOffset: (x, y, z, out) => out.set(0, NOZZLE_Y - y, 0),
     nozzleWorld: (out) => out.set(pose.x, NOZZLE_Y, pose.z),
+    floorZ: -111.6,
     bounds: { min: [-125, -200, -112], max: [415, 300, 540] },
   };
 }

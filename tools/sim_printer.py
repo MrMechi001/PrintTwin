@@ -38,6 +38,8 @@ def main():
     ap.add_argument("--layer", type=float, default=4.0)
     ap.add_argument("--port", type=int, default=8791)
     ap.add_argument("--printer-port", type=int, default=8799)
+    ap.add_argument("--type", default="1.4.0", help="PrusaLink printer type code to report (MK4 = 1.4.0)")
+    ap.add_argument("--model", default="auto", help="model = ... for the bridge config (default: detect)")
     a = ap.parse_args()
 
     data = a.job.read_bytes()
@@ -79,6 +81,9 @@ def main():
                     "job": {"id": 1, "progress": round(100 * prog, 1),
                             "time_remaining": int((len(layers) * a.layer) * (1 - prog)),
                             "time_printing": int(max(0, time.time() - t0))}})
+            if self.path == "/api/version":
+                return self._json({"api": "2.0.0", "server": "sim", "text": "PrusaLink", "hostname": "sim",
+                                   "firmware": "sim", "printer": a.type, "capabilities": {"upload-by-put": True}})
             if self.path == "/api/v1/job":
                 return self._json({"id": 1, "state": "PRINTING", "progress": round(100 * prog, 1),
                                    "file": {"name": short, "display_name": a.job.name, "size": len(data),
@@ -105,7 +110,7 @@ def main():
     cfg = SIM / "config.toml"
     cfg.write_text(
         f'cache_dir = "{(SIM / "cache").as_posix()}"\nincoming_dir = "{(SIM / "incoming").as_posix()}"\n\n'
-        f'[[printer]]\nid = "sim"\nname = "Simulated MK4"\nkind = "prusalink"\n'
+        f'[[printer]]\nid = "sim"\nname = "Simulated printer"\nkind = "prusalink"\nmodel = "{a.model}"\n'
         f'host = "127.0.0.1:{a.printer_port}"\napi_key = "sim"\n\n'
         f'[server]\nlisten_host = "127.0.0.1"\nport = {a.port}\n\n'
         f'[metrics]\nlisten_host = "127.0.0.1"\nlisten_port = {a.printer_port + 1}\n', encoding="utf-8")

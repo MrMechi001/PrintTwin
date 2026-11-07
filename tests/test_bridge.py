@@ -62,6 +62,9 @@ def run(handover: bool):
             time.sleep(0.2)
         took = time.time() - t0
         check(f"{label}: toolpath complete", bool(state and state.get("toolpath_complete")), f"{took:.1f} s")
+        check(f"{label}: printer detected as MK4 (type code 1.4.0)",
+              (state or {}).get("model") == "mk4" and state.get("model_source") == "printer",
+              f"{(state or {}).get('model')} from {(state or {}).get('model_source')}")
         if not handover:
             check("progressive: model visible before the download finished", seen_partial)
         else:

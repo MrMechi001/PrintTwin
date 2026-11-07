@@ -7,6 +7,8 @@ name = "Prusa MK4"
 kind = "prusalink"              # Prusa MK4/MK4S/MK3.9/Core One/XL/MINI with PrusaLink
 host = "192.168.x.y"            # printer IP (also used to match its UDP metrics)
 api_key = "PRUSALINK-API-KEY"   # printer: Settings > Network > PrusaLink
+# model = "auto"                # 3D model in the Printer view: auto (detect), mk4, mk4s, mk39,
+                                # mk39s, coreone, coreonel, xl, mini, bedslinger, corexy
 
 [server]
 listen_host = "0.0.0.0"         # 0.0.0.0 = reachable from other devices on the LAN/Tailscale

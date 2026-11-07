@@ -9,7 +9,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import incoming
+from . import incoming, models
 from .metrics import parse_datagram
 from .prusalink import PrusaLink
 from .toolpath import JobDecoder, load_file
@@ -37,6 +37,8 @@ class PrusaLinkPrinter:
         self.client = PrusaLink(self.host, cfg["api_key"])
         self.cache_dir = cache_dir
         self.incoming_dir = incoming_dir
+        self.model_cfg = str(cfg.get("model", "auto"))   # printer model to show, "auto" = detect
+        self.printer_type: str | None = None             # PrusaLink /api/version "printer", e.g. "1.4.0"
         self.lock = threading.RLock()
         self.subs: set[queue.Queue] = set()
 
@@ -92,9 +94,13 @@ class PrusaLinkPrinter:
             jb = st.get("job") or {}
             now = time.time()
             tr = self.tracker
+            job_model = (self.tp.meta.get("printer_model") if self.tp else None)
+            model, model_src = models.resolve(self.model_cfg, job_model, self.printer_type)
             return {
                 "id": self.id, "name": self.name, "kind": self.kind,
                 "online": self.online,
+                "model": model, "model_source": model_src,
+                "printer_type": self.printer_type, "printer_model": job_model,
                 "state": pr.get("state"),
                 "temps": {"nozzle": pr.get("temp_nozzle"), "nozzle_target": pr.get("target_nozzle"),
                           "bed": pr.get("temp_bed"), "bed_target": pr.get("target_bed")},
@@ -141,11 +147,20 @@ class PrusaLinkPrinter:
                 if self.online:
                     log(self.id, "offline:", e)
             with self.lock:
-                if ok and not self.online:
+                came_online = ok and not self.online
+                if came_online:
                     log(self.id, "online")
                 self.online = ok
                 if ok:
                     self.status = data
+            if came_online and self.printer_type is None:
+                try:
+                    _, ver = self.client.get_json("/api/version")
+                    self.printer_type = (ver or {}).get("printer")
+                    model, src = models.resolve(self.model_cfg, None, self.printer_type)
+                    log(self.id, f"printer type {self.printer_type!r} -> model {model or 'unknown'} ({src})")
+                except Exception as e:
+                    log(self.id, f"could not read /api/version: {e!r}")
             if ok:
                 try:
                     self._on_status(data)

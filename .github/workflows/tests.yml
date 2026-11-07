@@ -18,5 +18,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Toolpath parser
         run: python -I tests/test_toolpath.py
+      - name: Printer model detection
+        run: python -I tests/test_models.py
       - name: Bridge end-to-end (simulated printer)
         run: python -I tests/test_bridge.py

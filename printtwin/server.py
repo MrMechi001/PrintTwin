@@ -82,6 +82,8 @@ def make_handler(printers: dict, port: int):
                 return self._json([{"id": p.id, "name": p.name, "kind": p.kind} for p in printers.values()])
             if parts == ["info"]:
                 return self._json({"urls": local_urls(printers, port)})
+            if parts == ["models"]:          # printer models the viewer can load (web/models/*.glb)
+                return self._json({"glb": sorted(f.name for f in (WEB / "models").glob("*.glb"))})
             if len(parts) == 3 and parts[0] == "p" and parts[1] in printers:
                 p = printers[parts[1]]
                 what = parts[2]

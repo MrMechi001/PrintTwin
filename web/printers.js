@@ -1,0 +1,60 @@
+// Printer models for the Printer view. The bridge reports a model key (state.model, see
+// printtwin/models.py); each entry says how to build it and what to fall back to while a
+// true-to-size model doesn't exist yet.
+//   glb:        a CAD model in web/models/ (printer_glb.js), optional recolor {node: material}
+//   procedural: 'bedslinger' (printer3d.js) or 'corexy' (printer_corexy.js), sized by `volume`
+const ORANGE_Z = ['z-top-left', 'z-top-right', 'z-bottom-left', 'z-bottom-right'];
+const black = (names) => Object.fromEntries(names.map((n) => [n, 'petg']));
+
+export const MODELS = {
+  mk4:   { label: 'Original Prusa MK4', glb: 'models/mk4.glb' },
+  // MK4S: same frame and axes as the MK4; Z parts are black, only the X-ends stay orange.
+  // Until its own model exists (new Nextruder fan housing) it is the MK4 model recoloured.
+  mk4s:  { label: 'Original Prusa MK4S', glb: 'models/mk4s.glb', fallback: 'mk4s_interim' },
+  mk4s_interim: { label: 'Original Prusa MK4S', glb: 'models/mk4.glb', recolor: black(ORANGE_Z), approx: true },
+  mk39:  { label: 'Original Prusa MK3.9', glb: 'models/mk39.glb', fallback: 'mk39_interim' },
+  mk39_interim: { label: 'Original Prusa MK3.9', glb: 'models/mk4.glb', approx: true },
+  mk39s: { label: 'Original Prusa MK3.9S', glb: 'models/mk39s.glb', fallback: 'mk4s_interim' },
+  coreone:  { label: 'Prusa CORE One', glb: 'models/coreone.glb', fallback: 'corexy', volume: { bed: [250, 220], height: 270 } },
+  coreonel: { label: 'Prusa CORE One L', glb: 'models/coreonel.glb', fallback: 'corexy', volume: { bed: [300, 300], height: 330 } },
+  xl:    { label: 'Original Prusa XL', glb: 'models/xl.glb', fallback: 'corexy', volume: { bed: [360, 360], height: 360 } },
+  mini:  { label: 'Original Prusa MINI+', glb: 'models/mini.glb', fallback: 'bedslinger', volume: { bed: [180, 180], height: 180 } },
+  bedslinger: { label: 'Generic bed-slinger', procedural: 'bedslinger', generic: true },
+  corexy:     { label: 'Generic CoreXY', procedural: 'corexy', generic: true },
+};
+
+// which models/*.glb the server has (one request, cached)
+let available = null;
+async function hasModel(path) {
+  available ??= fetch('/api/models').then((r) => (r.ok ? r.json() : { glb: [] })).then((j) => new Set(j.glb))
+    .catch(() => new Set(['mk4.glb']));
+  return (await available).has(path.replace(/^models\//, ''));
+}
+
+// -> { printer, key (the entry actually used), requested, label, approx }
+export async function loadPrinter(requested, { volume } = {}) {
+  let key = MODELS[requested] ? requested : 'bedslinger';
+  const seen = new Set();
+  const want = MODELS[requested];
+  while (!seen.has(key)) {
+    seen.add(key);
+    const m = MODELS[key];
+    try {
+      if (m.glb && await hasModel(m.glb)) {
+        const { buildPrinter } = await import('./printer_glb.js');
+        const printer = await buildPrinter(new URL(m.glb, import.meta.url).href, { recolor: m.recolor });
+        return { printer, key, requested, label: m.label, approx: Boolean(m.approx) };
+      }
+      if (m.procedural) {
+        const vol = volume || want?.volume || {};
+        const mod = await import(m.procedural === 'corexy' ? './printer_corexy.js' : './printer3d.js');
+        const printer = mod.buildPrinter(m.procedural === 'corexy' ? vol : undefined);
+        return { printer, key, requested, label: want?.label || m.label, approx: true };
+      }
+    } catch (e) {
+      console.warn(`printer model ${key} failed`, e);
+    }
+    key = m.fallback || 'bedslinger';
+  }
+  throw new Error(`no printer model for ${requested}`);
+}
