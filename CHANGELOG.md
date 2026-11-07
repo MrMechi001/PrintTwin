@@ -6,12 +6,15 @@
   print-fan case, 360° shroud, fan-door cover) from Prusa's MK4S parts, black Z parts.
   MK3.9 / MK3.9S are shown as the MK4 / MK4S (approximate).
 * MK4 model: Nextruder idler (swivels, nut, lever) and hotend-fan rotor added.
+* **True-to-size Original Prusa MINI+** in the *Printer* view, from Prusa's MINI STEP parts
+  and drawings: the extruder rides on the Z carriage, a PTFE bowden runs to the hotend, the
+  portrait LCD shows the live status, the spool sits on the printed spool holder.
 * The printer model is detected from the printer itself (PrusaLink type code), then the job
   file; `model = "…"` in the config overrides it. Generic bed-slinger / CoreXY models for
   printers without their own model yet.
 * A second PrintTwin no longer shares the port with a running one (Windows): it says
   "already running" and opens the browser.
-* More printers: Klipper (Moonraker), OctoPrint and Bambu Lab adapters; true-to-size MINI,
+* More printers: Klipper (Moonraker), OctoPrint and Bambu Lab adapters; true-to-size
   CORE One, CORE One L and XL. Other PrusaLink printers (MK3.9, CORE One, XL, MINI) should
   already work – test reports welcome.
 * PrintTwin inside PrusaSlicer / OrcaSlicer (as a print host shown in the slicer's printer tab).

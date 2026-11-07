@@ -20,11 +20,12 @@ PrintTwin started on the Original Prusa MK4 – **support for more printers is i
 | **Original Prusa MK4** | PrusaLink + firmware metrics | ✅ tested (firmware 8.0), true-to-size 3D model |
 | **Original Prusa MK4S** | PrusaLink + firmware metrics | 🧪 should work today (same firmware) – **testers wanted**; true-to-size 3D model |
 | Original Prusa MK3.9 / MK3.9S | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; shown as the MK4 / MK4S (approximate) |
-| Prusa CORE One / CORE One L, XL, MINI / MINI+ | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY / bed-slinger model until their own is done |
+| Original Prusa MINI / MINI+ | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; true-to-size 3D model |
+| Prusa CORE One / CORE One L, XL | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY model until their own is done |
 | Klipper printers (Voron, Ender/Creality with Klipper, Sovol, Elegoo …) | Moonraker | 🛠️ in development |
 | OctoPrint printers (Prusa MK3S/MK3S+, Ender 3 …) | OctoPrint API | 📋 planned |
 | Bambu Lab (X1, P1, A1) | MQTT on the local network | 📋 planned |
-| True-to-size models for the *Printer* view: MINI, CORE One, CORE One L, XL | – | 🛠️ in development |
+| True-to-size models for the *Printer* view: CORE One, CORE One L, XL | – | 🛠️ in development |
 
 PrintTwin asks the printer which model it is (PrusaLink), so the *Printer* view picks the
 right one by itself; `model = "mk4s"` in the config overrides it.
@@ -37,9 +38,10 @@ independent project, not affiliated with Prusa Research.
 
 * **Live, not a guess**: follows the printer's own nozzle position (~80 Hz) and file
   position, so the view matches the real print to the extrusion line.
-* **The whole printer** (button *Printer*): a true-to-size MK4 or MK4S built from Prusa's CAD parts –
-  the bed slides, the X gantry rides the Z screws, the Nextruder moves, the spool unwinds,
-  the heater glows with the nozzle temperature, the display shows the live status.
+* **The whole printer** (button *Printer*): a true-to-size MK4, MK4S or MINI+ built from
+  Prusa's CAD parts – the bed slides, the X axis rides up and down, the print head moves,
+  the spool unwinds, the display shows the live status, the MK4's heater glows with the
+  nozzle temperature.
 * **Fast**: the model appears seconds after a print starts – PrusaSlicer can hand PrintTwin
   a copy of every sliced file, and otherwise the file is shown while it downloads.
 * **Any slicer**: `.bgcode` and `.gcode` from PrusaSlicer, OrcaSlicer, Bambu Studio,
@@ -152,6 +154,22 @@ the Y-carriage → the source model's nozzle sits exactly at the firmware's Z ma
 Rebuilding needs CadQuery and the Printables downloads in `cad_src/`; using the models
 needs nothing. `web/lab/model.html?f=../models/mk4s.glb&up=z` inspects one part by part.
 
+### The MINI+ model
+
+`tools/cad/build_mini.py` builds `web/models/mini.glb` from Prusa's
+[Original-Prusa-MINI](https://github.com/prusa3d/Original-Prusa-MINI) repository (GPL-3.0):
+every printed part, the heatsink, Y-carriage and steel sheet are Prusa's STEP files; the
+30 × 30 extrusions, rods, motors and the hotend (heatbreak, heater block, nozzle) are
+generated from Prusa's drawings in the same repository. Where the parts sit comes from
+Luis's MINI assembly ([Printables 307054](https://www.printables.com/model/307054), public
+domain), which uses Prusa's part frames exactly – a reference only, none of its geometry is
+used. The SuperPINDA holder is placed by the firmware's probe offset (−29, −3 mm). The
+firmware also fixes the G-code frame: X and Y home against hard stops (X 180.4 at the Z
+carriage, Y −3 at the rear plate), and those stops were measured by sliding the parts along
+their rods; at Z max 185 the carriage stops 2.5 mm under the top. The extruder rides on the Z carriage, a 275 mm
+PTFE bowden runs to the hotend, and the spool stands on the printed spool holder behind
+the column.
+
 ## Development
 
 Contributions welcome – especially test reports from other printers and new printer
@@ -170,8 +188,8 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **More printers** (in the works – see [Supported printers](#supported-printers))
 * Klipper / Moonraker, OctoPrint and Bambu Lab adapters next to PrusaLink.
-* True-to-size models for the *Printer* view: MINI, CORE One, CORE One L and XL next
-  (MK4 and MK4S are done); generic bed-slinger / CoreXY models for everything else.
+* True-to-size models for the *Printer* view: CORE One, CORE One L and XL next
+  (MK4, MK4S and MINI+ are done); generic bed-slinger / CoreXY models for everything else.
 
 **Inside your slicer**
 * PrintTwin right in **PrusaSlicer** and **OrcaSlicer**: both can already show a printer's
@@ -192,8 +210,8 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Licence
 
 PrintTwin is free software under the **GNU GPL v3** (`LICENSE`). The printer models
-`web/models/mk4.glb` and `mk4s.glb` are GPL-2.0 derivatives of FokieH's and Prusa Research's work –
-see `web/models/NOTICE.md`. Uses [three.js](https://threejs.org) (MIT) and
+`web/models/mk4.glb` and `mk4s.glb` are GPL-2.0 derivatives of FokieH's and Prusa Research's work,
+`mini.glb` is a GPL-3.0 derivative of Prusa Research's MINI files – see `web/models/NOTICE.md`. Uses [three.js](https://threejs.org) (MIT) and
 [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator) (MIT).
 "Prusa" and "Original Prusa" are trademarks of Prusa Research a.s.; PrintTwin is an
 independent project.

@@ -1,4 +1,6 @@
-# mk4.glb, mk4s.glb – licence and sources
+# Printer models – licence and sources
+
+## mk4.glb, mk4s.glb
 
 `mk4.glb` and `mk4s.glb` (and their `.gz` copies) are derivative works, licensed
 **GNU GPL v2.0** (full text: `LICENSE-GPL-2.0.txt` next to this file).
@@ -24,6 +26,25 @@ Built by `tools/cad/build_mk4.py` (`mk4` / `mk4s`) from:
 
 The source of the models is those STEP files plus the build script: download the
 Printables models into `cad_src/` (see the script's header) and run it.
+
+## mini.glb
+
+`mini.glb` (and `mini.glb.gz`) is a derivative work, licensed **GNU GPL v3.0** (full text:
+`LICENSE` in the repository root). Built by `tools/cad/build_mini.py` from:
+
+* **Prusa Research, "Original-Prusa-MINI"** – https://github.com/prusa3d/Original-Prusa-MINI –
+  GPL-3.0: all printed parts (MINI+), heatsink, Y-carriage, Z bottom plate and steel sheet
+  (STEP files), and the drawings used for the parts generated below. The engraved
+  "ORIGINAL PRUSA MINI" lettering on the front Y plate is filled in the model.
+* **Luis, "STEP File for Prusa Mini"** – https://www.printables.com/model/307054 – public
+  domain: used only as a reference for where Prusa's parts sit (they share its part frames);
+  none of its geometry is in the model.
+* PrintTwin (`tools/cad/build_mini.py`, GPL-3.0), from Prusa's drawings: 30 × 30 extrusions,
+  smooth rods and leadscrew, motors, hotend (heatbreak, heater block, nozzle, fittings),
+  linear bearings, pulleys and belts, fans, SuperPINDA, heatbed plate and standoffs, 608
+  bearings of the spool holder.
+
+Source: unzip Prusa's repository into `cad_src/prusa_mini/extracted/` and run the script.
 
 "Prusa", "Original Prusa" and the Prusa logo are trademarks of Prusa Research a.s.; these
 models are for visualising the user's own printer and are not endorsed by Prusa Research.

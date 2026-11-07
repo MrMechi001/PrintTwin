@@ -5,8 +5,9 @@
 //              xaxis (moves in Z) > carriage (moves in X); the nozzle moves in the plane y = nozzle_y
 //   corexy     (CORE One, XL):     static | bed (moves in Z) | gantry (moves in Y) > carriage (X);
 //              the nozzle tip stays at height z = nozzle_z
-// Optional anchors in extras.printtwin: lcd_screen, spool, filament_inlet_carriage,
-// cable_start_carriage, cable_end_static.
+// Optional anchors in extras.printtwin: lcd_screen (+ lcd_portrait), spool, filament_inlet_carriage
+// or filament_inlet_xaxis, cable_start_carriage + cable_end_static, bowden (start_xaxis, dir_start,
+// end_carriage, dir_end, length, radius).
 //
 // Printer interface (also printer3d.js / printer_corexy.js): { root, bedParts, setPose(x, y, z),
 // bedOffset(x, y, z, out), setFans, setFilament, setHeat, setLcd, tick, nozzleWorld, bounds, floorZ }
@@ -69,7 +70,7 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
     root.add(plane);
   }
 
-  const lcd = meta.lcd_screen ? makeLcd(meta.lcd_screen) : null;
+  const lcd = meta.lcd_screen ? makeLcd(meta.lcd_screen, { portrait: !!meta.lcd_portrait }) : null;
   if (lcd) root.add(lcd.mesh);
 
   const filMat = new THREE.MeshStandardMaterial({ color: 0xff8000, roughness: 0.45 });
@@ -77,12 +78,22 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
   const spool = sp ? makeSpool(sp, filMat) : null;
   if (spool) { spool.position.set(...sp.center); root.add(spool); }
   const cable = meta.cable_start_carriage ? makeCable() : null;
-  const strand = meta.filament_inlet_carriage && sp ? makeStrand(filMat) : null;
+  // filament inlet: on the print head (Nextruder) or on the Z carriage (MINI: extruder moves with Z only)
+  const inletCarriage = !!meta.filament_inlet_carriage;
+  const inletAt = meta.filament_inlet_carriage || meta.filament_inlet_xaxis;
+  const strand = inletAt && sp ? makeStrand(filMat) : null;
   if (cable) root.add(cable.mesh);
   if (strand) root.add(strand.mesh);
   const cableStart = cable && new THREE.Vector3(...meta.cable_start_carriage);
   const cableEnd = cable && new THREE.Vector3(...meta.cable_end_static);
-  const inlet = strand && new THREE.Vector3(...meta.filament_inlet_carriage);
+  const inlet = strand && new THREE.Vector3(...inletAt);
+  // PTFE bowden (MINI): from the extruder on the Z carriage to the top of the hotend
+  const bw = meta.bowden;
+  const bowden = bw ? makeCable(bw.radius ?? 2, 36, 0xe9eae4) : null;
+  if (bowden) { bowden.mesh.material.roughness = 0.35; root.add(bowden.mesh); }
+  const bwStart = bw && new THREE.Vector3(...bw.start_xaxis), bwEnd = bw && new THREE.Vector3(...bw.end_carriage);
+  const bwDirS = bw && new THREE.Vector3(...bw.dir_start), bwDirE = bw && new THREE.Vector3(...bw.dir_end);
+  const b0 = new THREE.Vector3(), b1 = new THREE.Vector3(), b2 = new THREE.Vector3(), b3 = new THREE.Vector3();
 
   // ---------------------------------------------------------------- pose
   const pose = { x: meta.pose?.x ?? 125, y: meta.pose?.y ?? 105, z: meta.pose?.z ?? 50 };
@@ -101,8 +112,18 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
       p2.set(cableEnd.x + 40, cableEnd.y - 70, Math.min(cs.z, cableEnd.z) - 30);
       cable.set(cs, p1, p2, cableEnd);
     }
+    if (bowden) {
+      b0.copy(bwStart); b0.z += corexy ? 0 : z;
+      b3.copy(bwEnd).add(shift);
+      // tangents out of both fittings; longer handles when the ends are close (tube length is fixed)
+      const k = Math.max(30, ((bw.length ?? 275) - b0.distanceTo(b3)) * 0.55);
+      b1.copy(bwDirS).multiplyScalar(k).add(b0);
+      b2.copy(bwDirE).multiplyScalar(k).add(b3);
+      bowden.set(b0, b1, b2, b3);
+    }
     if (strand) {
-      filTo.copy(inlet).add(shift);
+      filTo.copy(inlet);
+      if (inletCarriage) filTo.add(shift); else filTo.z += corexy ? 0 : z;
       const wr = spool.userData.windingRadius;
       filFrom.set(Math.min(Math.max(filTo.x, sp.center[0] - sp.width / 2 + 6), sp.center[0] + sp.width / 2 - 6),
         sp.center[1] - wr * 0.7, sp.center[2] - wr * 0.7);

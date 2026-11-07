@@ -62,6 +62,17 @@ if mk4s.exists():
     check("mk4s: new Nextruder parts", {"fan-case", "fan-case-cover", "fan-shroud", "fan-door-cover", "print-fan"} <= names)
     shrouds = [n for n in g["nodes"] if n.get("name") == "fan-shroud"]
     check("mk4s: only the MK4S fan shroud", len(shrouds) == 1, f"{len(shrouds)} nodes")
+mini = MODELS / "mini.glb"
+if mini.exists():
+    g = gltf_json(mini.read_bytes())
+    meta = g["extras"]["printtwin"]
+    names = {n.get("name") for n in g["nodes"]}
+    check("mini: Prusa's parts", {"z-top", "z-bottom", "x-carriage", "heatsink", "display-box", "extruder-front",
+                                  "superpinda-holder", "sheet"} <= names)
+    check("mini: orange printed parts", material_of(g, "z-top") == "orange" and material_of(g, "x-end") == "orange")
+    check("mini: portrait LCD, extruder on the Z carriage, bowden",
+          meta.get("lcd_portrait") is True and "filament_inlet_xaxis" in meta
+          and {"start_xaxis", "end_carriage", "dir_start", "dir_end"} <= set(meta.get("bowden", {})))
 mk4 = MODELS / "mk4.glb"
 if mk4.exists():
     g = gltf_json(mk4.read_bytes())

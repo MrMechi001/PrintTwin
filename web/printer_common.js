@@ -2,9 +2,10 @@
 import * as THREE from 'three';
 
 // ---------------------------------------------------------------- LCD with the live status
-export function makeLcd(corners) {
+export function makeLcd(corners, { portrait = false } = {}) {
+  const W = portrait ? 320 : 480, H = portrait ? 480 : 320;   // MINI: 240 x 320 portrait screen
   const canvas = document.createElement('canvas');
-  canvas.width = 480; canvas.height = 320;
+  canvas.width = W; canvas.height = H;
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   const [p0, p1, p2, p3] = corners.map((p) => new THREE.Vector3(...p));
@@ -20,25 +21,29 @@ export function makeLcd(corners) {
     if (k === key) return;
     key = k;
     const c = canvas.getContext('2d');
-    c.fillStyle = '#0a0b0e'; c.fillRect(0, 0, 480, 320);
-    c.fillStyle = '#1b1d22'; c.fillRect(0, 0, 480, 34);
+    c.fillStyle = '#0a0b0e'; c.fillRect(0, 0, W, H);
+    c.fillStyle = '#1b1d22'; c.fillRect(0, 0, W, 34);
     c.fillStyle = '#e8eaee'; c.font = '600 18px system-ui, sans-serif';
     const t = s?.temps || {};
     c.fillText(`${Math.round(t.nozzle ?? 0)}/${t.nozzle_target ?? 0}°C`, 14, 24);
-    c.fillText(`${Math.round(t.bed ?? 0)}/${t.bed_target ?? 0}°C`, 150, 24);
+    c.fillText(`${Math.round(t.bed ?? 0)}/${t.bed_target ?? 0}°C`, portrait ? 170 : 150, 24);
     if (s) {
+      const dy = portrait ? 40 : 0;                         // portrait: same layout, more air
       c.fillStyle = '#ff7a2a'; c.font = '700 26px system-ui, sans-serif';
-      c.fillText(s.online ? (s.state || '') : 'OFFLINE', 18, 78);
+      c.fillText(s.online ? (s.state || '') : 'OFFLINE', 18, 78 + dy);
       c.fillStyle = '#c9ced8'; c.font = '20px system-ui, sans-serif';
       const name = (s.job?.name || '').replace(/\.b?gcode$/i, '');
-      c.fillText(name.length > 36 ? name.slice(0, 35) + '…' : name, 18, 114);
+      const max = portrait ? 24 : 36;
+      c.fillText(name.length > max ? name.slice(0, max - 1) + '…' : name, 18, 114 + dy);
       const p = Math.max(0, Math.min(100, s.progress ?? 0));
-      c.fillStyle = '#262a31'; c.fillRect(18, 140, 444, 18);
-      c.fillStyle = '#ff7a2a'; c.fillRect(18, 140, 4.44 * p, 18);
+      c.fillStyle = '#262a31'; c.fillRect(18, 140 + dy, W - 36, 18);
+      c.fillStyle = '#ff7a2a'; c.fillRect(18, 140 + dy, ((W - 36) / 100) * p, 18);
       c.fillStyle = '#ffffff'; c.font = '700 54px system-ui, sans-serif';
-      c.fillText(`${Math.round(p)}%`, 18, 230);
+      c.fillText(`${Math.round(p)}%`, 18, 230 + dy * 1.5);
       c.font = '20px system-ui, sans-serif'; c.fillStyle = '#c9ced8';
-      if (s.time_remaining != null) c.fillText(`${Math.round(s.time_remaining / 60)} min left`, 220, 225);
+      if (s.time_remaining != null) {
+        c.fillText(`${Math.round(s.time_remaining / 60)} min left`, portrait ? 18 : 220, portrait ? 340 : 225);
+      }
     }
     tex.needsUpdate = true;
   }

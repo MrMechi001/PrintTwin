@@ -47,7 +47,8 @@ come with a similar simulator or recorded fixture so CI can test it without hard
 Models are GLB files in `web/models/` named after the model key (`printtwin/models.py`,
 `web/printers.js`) with four groups – `static`, `bed` (G-code bed coordinates, slides in Y),
 `xaxis` (moves in Z) and `carriage` (moves in X) – plus anchors in `extras.printtwin`
-(see `tools/cad/build_mk4.py`). CoreXY printers set `extras.printtwin.kinematics = "corexy"`
+(see `tools/cad/build_mk4.py` and `build_mini.py`; the optional ones – LCD corners, spool,
+filament inlet, cable, bowden – are listed at the top of `web/printer_glb.js`). CoreXY printers set `extras.printtwin.kinematics = "corexy"`
 and use `bed` (moves in Z), `gantry` (moves in Y) and `carriage` (moves in X).
 `tests/test_glb_models.py` checks the structure. Models must come from sources whose licence
 allows redistribution (e.g. GPL, CC BY, CC BY-SA) and must not contain manufacturer logos.
