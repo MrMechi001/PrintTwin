@@ -7,12 +7,13 @@ import json
 import mimetypes
 import os
 import queue
+import re
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from . import __version__
+from . import __version__, slicerhost
 from .config import ROOT
 
 WEB = ROOT / "web"
@@ -49,7 +50,7 @@ def local_urls(printers: dict, port: int) -> list[dict]:
     return out
 
 
-def make_handler(printers: dict, port: int):
+def make_handler(printers: dict, port: int, slicer: bool = False, log=print):
     class Handler(BaseHTTPRequestHandler):
         server_version = f"PrintTwin/{__version__}"
 
@@ -72,11 +73,66 @@ def make_handler(printers: dict, port: int):
         def do_GET(self):
             u = urlsplit(self.path)
             try:
+                if self._slicer(u):
+                    return
                 if u.path.startswith("/api/"):
                     return self._api(u.path[5:].strip("/").split("/"), parse_qs(u.query))
                 return self._static(u.path)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
+
+        def _other(self):
+            """PUT / POST / DELETE / HEAD / PATCH: only the slicer's print-host calls."""
+            try:
+                if not self._slicer(urlsplit(self.path)):
+                    if self.command == "HEAD":
+                        return self.do_GET()
+                    self._json({"error": "method not allowed"}, 405)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+
+        do_PUT = do_POST = do_DELETE = do_HEAD = do_PATCH = _other
+
+        def _slicer(self, u) -> bool:
+            """Print-host routes for PrusaSlicer / OrcaSlicer (see slicerhost.py); True if handled.
+            /p/<id>            the viewer for that printer (what the slicer's printer tab shows)
+            /p/<id>/api/...    passed on to the printer (connection test, storage, upload)
+            /api/version, /api/v1/..., /api/files...  the same without /p/<id> (one printer only)"""
+            m = re.match(r"^/p/([^/]+)(/.*)?$", u.path)
+            if m:
+                p = printers.get(unquote(m.group(1)))
+                rest = m.group(2) or ""
+                if p is None:
+                    self._json({"error": f"no printer {unquote(m.group(1))!r} in the config"}, 404)
+                elif rest in ("", "/", "/index.html") and self.command in ("GET", "HEAD"):
+                    self._send(302, b"", "text/plain", {"Location": f"/?p={quote(p.id)}"})
+                elif slicerhost.is_printer_api(rest):
+                    if (self.headers.get("Authorization") or "").lower().startswith("digest"):
+                        # the digest hash covers the URL the slicer asked for (/p/<id>/api/...), the
+                        # printer checks it against its own (/api/...): it can never match here
+                        self._json({"error": "HTTP digest login does not work through /p/<printer id>: in the "
+                                             "slicer set Authorization Type = API key and enter the printer's "
+                                             "PrusaLink password / API key (with one printer, "
+                                             "http://<this PC>:%d works with digest too)" % port}, 400)
+                    else:
+                        self._pass(p, rest + (f"?{u.query}" if u.query else ""))
+                else:
+                    self._json({"error": "not found"}, 404)
+                return True
+            if not slicerhost.is_printer_api(u.path):
+                return False
+            if len(printers) != 1:
+                self._json({"error": "several printers: use http://<this PC>:%d/p/<printer id> as the "
+                                     "slicer's print host" % port}, 404)
+            else:
+                self._pass(next(iter(printers.values())), u.path + (f"?{u.query}" if u.query else ""))
+            return True
+
+        def _pass(self, p, path_qs: str):
+            if not slicer:
+                return self._json({"error": "PrintTwin is not set up as print host - add  [slicer]  "
+                                            "print_host = true  to config.local.toml and restart PrintTwin"}, 403)
+            slicerhost.forward(self, p, path_qs, log)
 
         def _api(self, parts: list[str], query: dict):
             if parts == ["printers"]:
@@ -173,6 +229,7 @@ class _Server(ThreadingHTTPServer):
         super().server_bind()
 
 
-def serve(host: str, port: int, printers: dict):
-    """Raises OSError if the port is taken (e.g. PrintTwin is already running)."""
-    return _Server((host, port), make_handler(printers, port))
+def serve(host: str, port: int, printers: dict, slicer: bool = False, log=print):
+    """Raises OSError if the port is taken (e.g. PrintTwin is already running).
+    slicer: pass the slicers' print-host calls on to the printers ([slicer] print_host = true)."""
+    return _Server((host, port), make_handler(printers, port, slicer, log))

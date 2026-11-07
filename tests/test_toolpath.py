@@ -176,5 +176,20 @@ check("tool changes per segment (M104 T1 is no change)", inf["tool_changes"] == 
 check("filament colours / types per tool", inf["filament_colours"] == ["#FF0000", "#00FF00", "#0000FF"]
       and inf["filament_colour"] == "#FF0000" and inf["filament_types"] == ["PLA", "PETG", "PLA"], str(inf.get("filament_colours")))
 
+# 9) layer fallback (PrusaLink Z only) at the start of a job: the model is ready before the print
+#    begins (slicer hand-over), the MK4 heats with the nozzle parked high above the part
+lay = b"M83\n" + b"".join(b";LAYER_CHANGE\n;Z:%.1f\n;HEIGHT:0.2\nG1 X0 Y0 Z%.1f\nG1 X10 E1\nG1 Y10 E1\n" % (z, z)
+                          for z in (0.2, 0.4, 0.6, 0.8, 1.0))
+lt = parse_gcode(lay)
+tr = Tracker(lt)
+check("parked above the model (Z 40) while heating: nothing printed", tr.from_axis_z(40.0, 0) == 0)
+check("Z 40 at 3 % (no file position): still nothing - above the top layer", tr.from_axis_z(40.0, 3) == 0)
+check("first layers' height at 0 %, no file position: nothing yet", tr.from_axis_z(0.6, 0) == 0)
+check("Z 0.6 at 10 %: the two layers below are done", tr.from_axis_z(0.6, 10) == lt.layer_start[2], f"{tr.printed}")
+tr = Tracker(lt)
+tr.feed_sdpos(lt.line_off[3])
+check("never past the firmware's file position", tr.from_axis_z(lt.layer_z[-1], 50) == tr._sd_index() == 4,
+      f"{tr.printed}")
+
 print("\nall passed" if not failures else f"\n{failures} FAILED")
 sys.exit(1 if failures else 0)

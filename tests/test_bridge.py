@@ -94,7 +94,47 @@ def run(handover: bool):
         proc.wait(10)
 
 
+def refused():
+    """The printer refuses the job file at first (Prusa Connect job): PrintTwin retries with pauses,
+    doesn't announce a fresh empty model on every attempt (the viewer would re-frame the camera
+    each time), and loads the job once the printer hands it out."""
+    port, pport = free_port(), free_port()
+    proc = subprocess.Popen([sys.executable, "-I", "-u", str(ROOT / "tools" / "sim_printer.py"), str(JOB),
+                             "--kbps", "400", "--heat", "1", "--layer", "0.5", "--refuse", "7",
+                             "--port", str(port), "--printer-port", str(pport)],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    base = f"http://127.0.0.1:{port}"
+    keys, msgs, state = set(), set(), None
+    try:
+        t0 = time.time()
+        while time.time() - t0 < 60:
+            try:
+                state = json.loads(get(f"{base}/api/p/sim/state")[1])
+            except OSError:
+                time.sleep(0.3)
+                continue
+            if state.get("toolpath_key"):
+                keys.add(state["toolpath_key"])
+            if (state.get("loading") or {}).get("phase") == "error":
+                msgs.add(state["loading"]["message"])
+            if state.get("toolpath_complete"):
+                break
+            time.sleep(0.2)
+        took = time.time() - t0
+        check("refused download: loaded once the printer hands the file out",
+              bool(state and state.get("toolpath_complete")), f"{took:.1f} s")
+        gens = sorted(int(k.rsplit(".", 1)[1]) for k in keys)
+        check("refused download: retried, but only the first empty model and the real one announced",
+              len(keys) <= 2 and gens and gens[-1] >= 3, str(sorted(keys)))
+        check("refused download: says why and that it retries", any("retrying" in m for m in msgs), str(msgs))
+    finally:
+        proc.terminate()
+        out = proc.communicate(timeout=10)[0].decode("utf-8", "replace")
+    check("refused download: no traceback per retry", out.count("Traceback") <= 1, f"{out.count('Traceback')} tracebacks")
+
+
 run(handover=False)
 run(handover=True)
+refused()
 print("\nall passed" if not failures else f"\n{failures} FAILED")
 sys.exit(1 if failures else 0)

@@ -16,4 +16,7 @@ def load(path: Path | None = None) -> dict:
     cfg.setdefault("metrics", {})
     cfg["metrics"].setdefault("listen_host", "0.0.0.0")
     cfg["metrics"].setdefault("listen_port", 8514)
+    cfg.setdefault("slicer", {})
+    v = cfg["slicer"].get("print_host", False)          # only an explicit yes turns it on
+    cfg["slicer"]["print_host"] = v is True or str(v).strip().lower() in ("true", "yes", "on", "1")
     return cfg

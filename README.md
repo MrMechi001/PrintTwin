@@ -50,8 +50,10 @@ independent project, not affiliated with Prusa Research.
   filament's colour; the XL shows all its heads (up to five, from the printer model in the
   job) with a spool per head – three on the left side, two on the right – parks the idle
   heads in their docks and picks up the active one at every tool change.
-* **Fast**: the model appears seconds after a print starts – PrusaSlicer can hand PrintTwin
-  a copy of every sliced file, and otherwise the file is shown while it downloads.
+* **Inside your slicer**: PrusaSlicer's *Physical Printer* tab and OrcaSlicer's *Device* tab
+  show PrintTwin's live 3D view; uploads go through PrintTwin to the printer.
+* **Fast**: the model appears seconds after a print starts – PrintTwin keeps a copy of every
+  job the slicer sends, and otherwise the file is shown while it downloads.
 * **Any slicer**: `.bgcode` and `.gcode` from PrusaSlicer, OrcaSlicer, Bambu Studio,
   SuperSlicer and Cura.
 * **Phone & tablet**: the *Phone* button shows a QR code; anyone on your Wi-Fi can watch.
@@ -81,7 +83,38 @@ On the printer: **Settings → Network → Metrics & Log**
 
 The HUD shows what arrives: *Live nozzle position · 80 Hz* when everything is set.
 
+### Optional: PrintTwin inside PrusaSlicer / OrcaSlicer
+
+Set PrintTwin as the slicer's print host: the printer tab of the slicer then shows the live
+3D view, *Send to printer* / *Upload and print* go through PrintTwin to the printer, and
+PrintTwin keeps a copy of the file, so the model is ready the moment the print starts.
+
+1. In `config.local.toml`:
+   ```toml
+   [slicer]
+   print_host = true
+   ```
+   and restart PrintTwin.
+2. **PrusaSlicer**: printer combo box → *Add physical printer* (or the cog next to your
+   printer). **OrcaSlicer**: the Wi-Fi/connection button next to the printer.
+   * Host type: **PrusaLink**
+   * Hostname / URL: `http://<IP of the PC running PrintTwin>:8790/p/<printer id>`,
+     e.g. `http://192.168.1.20:8790/p/mk4` (the `id` from `config.local.toml`)
+   * Authorization type **API key**: the printer's PrusaLink password / API key (printer:
+     *Settings → Network → PrusaLink*), then *Test*.
+3. PrusaSlicer shows a tab with the printer's name, OrcaSlicer the *Device* tab – both now
+   show PrintTwin.
+
+PrintTwin passes every call on to the printer unchanged, with the key the slicer sends –
+it adds no credentials of its own, so it can do nothing the slicer couldn't do on the
+printer directly. Use the API key: user name/password (digest) logins only work with the
+address without `/p/<printer id>` (`http://<PC>:8790`, one printer in the config).
+OrcaSlicer only: to keep uploading straight to the printer and only show PrintTwin, leave
+the printer as host and put the PrintTwin address into *Device UI* (`print_host_webui`).
+
 ### Optional: let PrusaSlicer hand over each job (model ready ~2 s after the start)
+
+Not needed if PrintTwin is your print host (above) – for uploads via Prusa Connect or USB stick.
 
 Downloading the job file from the printer over Wi-Fi is slow (~18 KB/s during a print).
 PrusaSlicer runs post-processing scripts on the finished file – exactly the bytes it then
@@ -100,7 +133,10 @@ up while the file downloads.
 ## Security & privacy
 
 * PrintTwin only **reads** from the printer (status, job file, metrics). It cannot start,
-  stop or change anything.
+  stop or change anything on its own.
+* As the slicer's print host (`[slicer] print_host = true`, off by default) it passes the
+  slicer's calls on to the printer – with the key the slicer sends, never with its own. Without
+  the printer's API key nobody can upload or print through it.
 * The API key stays in `config.local.toml` on your computer; the browser never sees it.
 * The viewer has **no login**: anyone on your network can watch. Keep it there – don't
   forward the port on your router. For remote viewing use a VPN such as Tailscale.
@@ -110,7 +146,7 @@ up while the file downloads.
 ## How it works
 
 ```
- Slicer ──upload/USB──► printer
+ Slicer ──upload/USB──► printer        (or slicer ──► PrintTwin /p/<id> ──► printer, a copy kept)
                            │  PrusaLink HTTP: status, job, job file
                            │  UDP metrics:    sdpos 10 Hz, pos_x/y/z ~65-85 Hz
                            ▼
@@ -121,6 +157,7 @@ up while the file downloads.
                 tool / filament changes and colours)
    tracker.py   file position + nozzle xyz → "printed" = segment index + fraction
    server.py    HTTP + Server-Sent Events
+   slicerhost.py  print host for PrusaSlicer / OrcaSlicer: PrusaLink calls passed through, uploads kept
                            ▼
  web/ (three.js)  one instanced draw call for all segments; a single uniform
                   (segment count) decides what is printed, so playback is free
@@ -199,11 +236,14 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 * `python -I tests/test_toolpath.py` – parser: `.gcode` == `.bgcode`, other slicers,
   incremental decoding; `python -I tests/test_bridge.py` – end-to-end with a simulated printer;
-  `tests/test_models.py` – printer detection; `tests/test_glb_models.py` – the 3D printer models.
+  `tests/test_slicerhost.py` – the slicer print host; `tests/test_models.py` – printer
+  detection; `tests/test_glb_models.py` – the 3D printer models.
 * `python -I tools/sim_printer.py JOB.bgcode --kbps 18 [--handover] [--type 3.1.0]` – a fake
   PrusaLink printer plus the bridge on port 8791: try PrintTwin without a printer; `--type`
   picks the printer it pretends to be (PrusaLink type codes in `printtwin/models.py`, e.g.
-  `1.4.1` MK4S, `2.1.0` MINI, `3.1.0` XL).
+  `1.4.1` MK4S, `2.1.0` MINI, `3.1.0` XL). It is also a print host for a slicer:
+  `http://localhost:8791/p/sim`, host type PrusaLink, API key `sim` – *Upload and print*
+  makes the upload the simulated job.
 * `tools/cad/build_mk4.py`, `build_mini.py`, `build_xl.py` – rebuild the 3D printer models
   (needs CadQuery and the CAD downloads named in each script).
 * `tools/probe_api.py`, `tools/probe_metrics.py` – inspect a real printer
@@ -217,11 +257,9 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 * True-to-size models for the *Printer* view: CORE One and CORE One L next (MK4, MK4S and
   MINI+ are done, the XL is approximate); generic bed-slinger / CoreXY models for everything else.
 
-**Inside your slicer** (🛠️ in development)
-* PrintTwin right in **PrusaSlicer** and **OrcaSlicer**: both can already show a printer's
-  web page in a tab (PrusaSlicer's *Physical Printer* tab, OrcaSlicer's *Device* tab). PrintTwin
-  will act as that print host – the live 3D view appears inside the slicer, uploads pass
-  through PrintTwin to the printer, and the model is ready the moment the print starts.
+**Inside your slicer** (✅ PrusaLink printers, see [above](#optional-printtwin-inside-prusaslicer--orcaslicer))
+* Next: the same for Klipper / Moonraker printers (Voron & co.) with the Moonraker adapter,
+  and a compact view for the slicer tab.
 
 **Control the printer from the 3D view** (opt-in, behind a login)
 * Start, pause and stop prints, upload jobs and manage a print queue right where you watch

@@ -87,7 +87,7 @@ def main(argv=None):
     s = cfg["server"]
     url = f"http://localhost:{s['port']}/"
     try:                                    # bind first: a second PrintTwin must not start next to the first
-        httpd = serve(s["listen_host"], s["port"], printers)
+        httpd = serve(s["listen_host"], s["port"], printers, slicer=cfg["slicer"]["print_host"], log=log)
     except OSError as e:
         print(f"PrintTwin is already running (port {s['port']} is in use: {e.strerror or e}).\n"
               f"Opening the running one: {url}")
@@ -100,6 +100,9 @@ def main(argv=None):
     for p in printers.values():
         p.start()
     log(f"PrintTwin {__version__} - viewer: {url}  ({len(printers)} printer(s))")
+    if cfg["slicer"]["print_host"]:
+        log("print host for PrusaSlicer / OrcaSlicer (host type PrusaLink, the printer's API key): "
+            + ", ".join(f"http://<this PC>:{s['port']}/p/{pid}" for pid in printers))
     if args.open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:

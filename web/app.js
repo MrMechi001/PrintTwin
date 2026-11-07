@@ -378,7 +378,7 @@ async function loadToolpath(key) {
     applyInfo(info);
     lastInfoAt = performance.now();
     buf_.length = 0;
-    fit();
+    if (!userMoved) fit();          // keep the view the user chose (Fit frames it again)
   } catch (e) {
     console.warn('toolpath load failed', e);
     setTimeout(() => { if (loadingKey === key) loadingKey = null; }, 3000);

@@ -24,3 +24,5 @@ jobs:
         run: python -I tests/test_glb_models.py
       - name: Bridge end-to-end (simulated printer)
         run: python -I tests/test_bridge.py
+      - name: Slicer print host
+        run: python -I tests/test_slicerhost.py

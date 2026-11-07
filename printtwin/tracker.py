@@ -96,13 +96,20 @@ class Tracker:
                 self.nozzle = tuple(self.tp.start[b:b + 3])
         return self.printed
 
-    def from_axis_z(self, axis_z: float | None) -> float:
+    def from_axis_z(self, axis_z: float | None, progress: float | None = None) -> float:
+        """Everything below the nozzle's layer is done - but only while Z can be a print layer:
+        not while the nozzle is parked above the whole model (heating, start G-code), not at 0 %
+        without a file position, and never beyond the firmware's file position (sdpos)."""
         tp = self.tp
-        if axis_z is None or not tp.layer_z:
+        if axis_z is None or not tp.layer_z or axis_z > tp.layer_z[-1] + Z_TOL:
+            return self.printed
+        if self.sdpos is None and progress is not None and progress <= 0:
             return self.printed
         i = bisect_right(tp.layer_z, axis_z + 1e-3) - 1
         if i >= 0:
             p = float(tp.layer_start[i])
+            if self.sdpos is not None:
+                p = min(p, float(self._sd_index()))
             if p > self.printed:
                 self.printed = p
         return self.printed

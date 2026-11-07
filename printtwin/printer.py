@@ -7,6 +7,7 @@ import queue
 import threading
 import time
 import traceback
+import urllib.error
 from pathlib import Path
 
 from . import incoming, models
@@ -16,6 +17,7 @@ from .toolpath import JobDecoder, load_file
 from .tracker import Tracker
 
 POLL_S = 2.0
+RETRY_S = (5, 10, 20, 30)      # waits before retrying a job file the printer refused
 METRICS_STALE_S = 3.0
 
 
@@ -56,6 +58,7 @@ class PrusaLinkPrinter:
         self.tracker: Tracker | None = None
         self._loading_key: str | None = None
         self._gen = 0
+        self._retry: tuple[str, int, float] | None = None   # (job key, failures, next try) after a failed load
 
         self.last_pos_wall = 0.0
         self.last_sdpos_wall = 0.0
@@ -184,7 +187,9 @@ class PrusaLinkPrinter:
                 log(self.id, f"job {job['id']}: {self.job['display_name']}")
         if self.job:
             key = f"{self.job['m_timestamp']}_{self.job['size']}"
-            if key != self.tp_cache_key and key != self._loading_key:
+            r = self._retry
+            waiting = r is not None and r[0] == key and time.time() < r[2]
+            if key != self.tp_cache_key and key != self._loading_key and not waiting:
                 with self.lock:
                     self._loading_key = key
                     self._gen += 1
@@ -201,7 +206,7 @@ class PrusaLinkPrinter:
                 if time.time() - self.last_sdpos_wall < METRICS_STALE_S:
                     tr.from_sdpos_only()
                 else:
-                    tr.from_axis_z(pr.get("axis_z"))
+                    tr.from_axis_z(pr.get("axis_z"), (jb or {}).get("progress"))
 
     # ----------------------------------------------------------------- loader
     def _load_job(self, job: dict, key: str, gen: int):
@@ -229,9 +234,13 @@ class PrusaLinkPrinter:
                 log(self.id, f"toolpath from {source} in {time.time() - t0:.1f} s")
                 return
 
-            log(self.id, f"downloading {job['download']} ({job.get('size')} bytes), building while it arrives")
             dec = JobDecoder()
-            self._install(dec.tp, key, gen, job)
+            # a new job clears the old model at once; a retry of a refused download shows the
+            # model only once data arrives (not a fresh empty one on every attempt)
+            installed = not (self._retry and self._retry[0] == key)
+            if installed:
+                log(self.id, f"downloading {job['download']} ({job.get('size')} bytes), building while it arrives")
+                self._install(dec.tp, key, gen, job)
             tmp = path.with_name(path.name + ".part")
             total0 = job.get("size") or 0
             with self.lock:
@@ -240,11 +249,15 @@ class PrusaLinkPrinter:
 
             with open(tmp, "wb") as f:
                 def on_chunk(data: bytes, n: int, total: int):
+                    nonlocal installed
                     if self._gen != gen:
                         raise _Superseded()
                     f.write(data)
                     with self.tp_lock:
                         dec.feed(data)
+                    if not installed:
+                        self._install(dec.tp, key, gen, job)
+                        installed = True
                     with self.lock:
                         self.loading = {"phase": "download", "done": n, "total": total or total0,
                                         "progressive": True}
@@ -255,16 +268,28 @@ class PrusaLinkPrinter:
                 dec.finish()
             tmp.replace(path)
             self._install(dec.tp, key, gen, job)
+            self._retry = None
             log(self.id, f"downloaded + built in {time.time() - t0:.0f} s")
         except _Superseded:
             log(self.id, f"job {key} superseded while downloading")
         except Exception as e:
-            traceback.print_exc()
+            n = self._retry[1] + 1 if self._retry and self._retry[0] == key else 1
+            wait = RETRY_S[min(n, len(RETRY_S)) - 1]
+            if isinstance(e, urllib.error.HTTPError) and e.code == 404:
+                msg = "the printer doesn't hand out the job file yet (e.g. sent via Prusa Connect) - retrying"
+            else:
+                msg = str(e)
+            if n == 1 or not isinstance(e, urllib.error.HTTPError):
+                if isinstance(e, (urllib.error.URLError, OSError)):
+                    log(self.id, f"job file: {e} - retrying in {wait} s")
+                else:
+                    traceback.print_exc()
             with self.lock:
                 if self._gen == gen:
-                    self.loading = {"phase": "error", "message": str(e)}
+                    self.loading = {"phase": "error", "message": msg}
                     self._loading_key = None
-                    self.tp_cache_key = None          # retry on the next status poll
+                    self.tp_cache_key = None          # retry after a pause (RETRY_S)
+                    self._retry = (key, n, time.time() + wait)
             self.publish_state()
 
     def _install(self, tp, key: str, gen: int, job: dict):
@@ -285,7 +310,7 @@ class PrusaLinkPrinter:
                 if tp.complete and pr.get("state") == "FINISHED":
                     tracker.finish()
                 elif tp.complete:
-                    tracker.from_axis_z(pr.get("axis_z"))
+                    tracker.from_axis_z(pr.get("axis_z"), ((self.status or {}).get("job") or {}).get("progress"))
                 self.tracker = tracker
             elif tp.complete and self.tracker:
                 pr = (self.status or {}).get("printer") or {}

@@ -5,9 +5,24 @@
 * More printers: Klipper (Moonraker), OctoPrint and Bambu Lab adapters; true-to-size
   CORE One and CORE One L, the XL refined with real measurements. Other PrusaLink printers
   (MK3.9, CORE One, XL, MINI) should already work – test reports welcome.
-* PrintTwin inside PrusaSlicer / OrcaSlicer (as a print host shown in the slicer's printer tab).
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
+
+## Unreleased
+
+* **PrintTwin inside PrusaSlicer and OrcaSlicer**: set `http://<PC>:8790/p/<printer id>` as
+  the print host (host type PrusaLink, the printer's own API key) and the slicer's printer tab
+  (*Physical Printer* / *Device*) shows the live 3D view. Connection test, uploads and
+  *Upload and print* pass through PrintTwin to the printer unchanged (the slicer's key, none of
+  PrintTwin's own); PrintTwin keeps a copy of each upload, so the model is ready the moment the
+  print starts. Off unless `[slicer] print_host = true`.
+* Simulated printer: accepts uploads (PrusaLink PUT); *Upload and print* starts the new job;
+  `--refuse S` refuses the job file for S seconds.
+* Fix: a job whose model was ready before the print began (slicer copy) showed as fully printed
+  while the printer was still heating with the nozzle parked above it.
+* Fix: a job file the printer doesn't hand out (e.g. sent via Prusa Connect, while printing) is
+  retried with pauses instead of every 2 s - the 3D view no longer jumps back to the default
+  camera with each attempt; a camera the user moved is kept when a model reloads.
 
 ## 0.4.0 – more printers in 3D, multi-material
 

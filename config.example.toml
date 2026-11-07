@@ -19,3 +19,11 @@ port = 8790
 #   host = this PC's IP, port = listen_port, enable pos_x / pos_y / pos_z in the Metrics List
 listen_host = "0.0.0.0"
 listen_port = 8514
+
+[slicer]
+# PrintTwin as the print host in PrusaSlicer (Physical Printer) / OrcaSlicer (Device tab):
+# the slicer's printer tab shows the live 3D view, uploads pass through PrintTwin to the printer
+# and the model is ready the moment the print starts. In the slicer: host type PrusaLink,
+# hostname http://<this PC's IP>:8790/p/<printer id>, API key = the printer's PrusaLink key.
+# PrintTwin passes each call on unchanged with the slicer's key; it adds no credentials itself.
+print_host = false
