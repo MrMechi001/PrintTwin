@@ -23,12 +23,14 @@ export const MODELS = {
   corexy:     { label: 'Generic CoreXY', procedural: 'corexy', generic: true },
 };
 
-// which models/*.glb the server has (one request, cached)
+// which models/*.glb the server has (one request, cached); if the server can't say
+// (older bridge), just try loading - a missing file falls back like any other failure
 let available = null;
 async function hasModel(path) {
-  available ??= fetch('/api/models').then((r) => (r.ok ? r.json() : { glb: [] })).then((j) => new Set(j.glb))
-    .catch(() => new Set(['mk4.glb']));
-  return (await available).has(path.replace(/^models\//, ''));
+  available ??= fetch('/api/models').then((r) => (r.ok ? r.json() : null)).then((j) => (j ? new Set(j.glb) : null))
+    .catch(() => null);
+  const set = await available;
+  return set ? set.has(path.replace(/^models\//, '')) : true;
 }
 
 // -> { printer, key (the entry actually used), requested, label, approx }

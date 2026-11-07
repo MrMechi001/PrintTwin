@@ -21,6 +21,8 @@ PLACEHOLDERS = {"192.168.x.y", "PRUSALINK-API-KEY", ""}
 def metrics_listener(host: str, port: int, by_ip: dict):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):          # Windows: no silent port sharing
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
     sock.bind((host, port))
     log(f"metrics: listening on UDP {host}:{port}")
     while True:
@@ -82,14 +84,21 @@ def main(argv=None):
             by_ip[socket.gethostbyname(p.host.split(":")[0])] = p
         except OSError as e:
             log(f"{p.id}: cannot resolve {p.host}: {e}")
+    s = cfg["server"]
+    url = f"http://localhost:{s['port']}/"
+    try:                                    # bind first: a second PrintTwin must not start next to the first
+        httpd = serve(s["listen_host"], s["port"], printers)
+    except OSError as e:
+        print(f"PrintTwin is already running (port {s['port']} is in use: {e.strerror or e}).\n"
+              f"Opening the running one: {url}")
+        if args.open:
+            webbrowser.open(url)
+        sys.exit(0)
     m = cfg["metrics"]
     threading.Thread(target=metrics_listener, args=(m["listen_host"], m["listen_port"], by_ip),
                      name="metrics", daemon=True).start()
     for p in printers.values():
         p.start()
-    s = cfg["server"]
-    httpd = serve(s["listen_host"], s["port"], printers)
-    url = f"http://localhost:{s['port']}/"
     log(f"PrintTwin {__version__} - viewer: {url}  ({len(printers)} printer(s))")
     if args.open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()

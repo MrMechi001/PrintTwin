@@ -5,6 +5,7 @@ import gzip
 import ipaddress
 import json
 import mimetypes
+import os
 import queue
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -160,7 +161,18 @@ def make_handler(printers: dict, port: int):
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows SO_REUSEADDR lets a second process bind the same port and steal requests
+    # (an old PrintTwin kept answering). Claim the port exclusively there instead.
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve(host: str, port: int, printers: dict):
-    httpd = ThreadingHTTPServer((host, port), make_handler(printers, port))
-    httpd.daemon_threads = True
-    return httpd
+    """Raises OSError if the port is taken (e.g. PrintTwin is already running)."""
+    return _Server((host, port), make_handler(printers, port))

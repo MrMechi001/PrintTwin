@@ -415,8 +415,12 @@ function makeFloor(z = -111.6, center = [125, 100]) {
 
 // The model follows what the bridge detected (state.model: from the job file, the printer's
 // type code or the config); web/printers.js maps it to a CAD model or a generic fallback.
-let printerKey = null, printerInfo = null;
+let printerKey = null, printerInfo = null, firstStateAt = 0;
 const wantedModel = () => state?.model || 'bedslinger';
+// right after the bridge starts it hasn't asked the printer for its type yet: wait a few
+// seconds before falling back to a generic model, instead of flashing it first
+const detectionPending = () => Boolean(state && !state.model && state.online && state.printer_type == null
+  && performance.now() - firstStateAt < 5000);
 
 function jobVolume() {
   const s = tp?.info?.bed_shape;
@@ -477,7 +481,7 @@ function showModelLabel() {
 async function setPrinterMode(on) {
   printerMode = on;
   bPrinter.setAttribute('aria-pressed', String(on));
-  if (on && state) {                                         // without state yet, onState loads it
+  if (on && state && !detectionPending()) {                  // otherwise onState loads it
     try { await ensurePrinter(); } catch (e) { console.warn('printer model failed', e); }
   }
   if (printer) {
@@ -570,7 +574,8 @@ function onState(s) {
   }
 
   // printer model: load it once the first state arrives, swap it when the detection changes
-  if (printerMode && wantedModel() !== printerKey && printerLoading?.key !== wantedModel()) {
+  if (!firstStateAt) firstStateAt = performance.now();
+  if (printerMode && !detectionPending() && wantedModel() !== printerKey && printerLoading?.key !== wantedModel()) {
     ensurePrinter().catch((e) => console.warn('printer model failed', e));
   }
 }
