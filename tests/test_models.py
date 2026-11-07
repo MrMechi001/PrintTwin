@@ -24,8 +24,16 @@ for s, want in [("MK4", "mk4"), ("MK4IS", "mk4"), ("MK4ISMMU3", "mk4"), ("MK4S",
                 ("MINI", "mini"), ("MINIIS", "mini"), ("ENDER3", None), ("", None), (None, None)]:
     check(f"slicer {s!r}", models.from_slicer(s), want)
 
-check("prusalink 1.4.0", models.from_prusalink("1.4.0"), "mk4")
-check("prusalink 1.4.1", models.from_prusalink("1.4.1"), "mk4s")
+for s, want in [("MK3.5", "bedslinger"), ("MK3S", "bedslinger"), ("MK2.5S", "bedslinger"),
+                ("XLP5T", "xl"), ("XL2IS", "xl"), ("COREONEOAK", "coreone"), ("COREONE_INDX4T", "coreone"),
+                ("COREONEL-INDX", "coreonel"), ("MK3.9SMMU3", "mk39s")]:
+    check(f"slicer {s!r}", models.from_slicer(s), want)
+
+for code, want in [("1.4.0", "mk4"), ("1.4.1", "mk4s"), ("1.3.9", "mk39"), ("1.3.10", "mk39s"),
+                   ("1.3.5", "bedslinger"), ("2.1.0", "mini"), ("3.1.0", "xl"), ("3.1.1", "xl"),
+                   ("7.1.0", "coreone"), ("7.10.0", "coreone"), ("7.2.0", "coreone"), ("8.1.0", "coreonel"),
+                   ("8.10.0", "coreonel")]:
+    check(f"prusalink {code}", models.from_prusalink(code), want)
 check("prusalink unknown sub-version 1.4.7", models.from_prusalink("1.4.7"), "mk4")
 check("prusalink unknown 9.9.9", models.from_prusalink("9.9.9"), None)
 
