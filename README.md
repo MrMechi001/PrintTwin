@@ -3,13 +3,16 @@
 **Watch your print grow in real time, in 3D.** PrintTwin follows your printer live and
 draws the part in your browser exactly as the nozzle lays it down – on a true-to-size,
 animated model of the printer whose bed, gantry and extruder move with the real machine.
-A live G-code / bgcode viewer for Prusa printers via PrusaLink. Works on PC, tablet and phone.
+A live G-code / bgcode viewer for Prusa printers via PrusaLink – MK4, MK4S, MINI+ and XL
+in 3D, multi-material prints in their real colours. Works on PC, tablet and phone.
 
 ![PrintTwin: a Prusa MK4 printing, live](docs/printer.jpg)
 
-| Close to the nozzle | Slicer feature colours + preview of what's still to print |
+| Original Prusa MINI+ | Original Prusa XL – five heads, the idle ones docked |
 |---|---|
-| ![close-up](docs/printer-close.jpg) | ![feature colours](docs/features.jpg) |
+| ![PrintTwin with an Original Prusa MINI+](docs/mini.jpg) | ![PrintTwin with a five-head Original Prusa XL](docs/xl.jpg) |
+| **Multi-material**: every tool's filament in its colour | Slicer feature colours + preview of what's still to print |
+| ![a five-colour print from an XL](docs/multicolor.jpg) | ![feature colours](docs/features.jpg) |
 
 ## Supported printers
 
@@ -23,10 +26,10 @@ PrintTwin started on the Original Prusa MK4 – **support for more printers is i
 | Original Prusa MINI / MINI+ | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; true-to-size 3D model |
 | Original Prusa XL | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; 3D model with Prusa's parts, frame estimated (approximate) |
 | Prusa CORE One / CORE One L | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY model until their own is done |
-| Klipper printers (Voron, Ender/Creality with Klipper, Sovol, Elegoo …) | Moonraker | 🛠️ in development |
+| Klipper printers (Voron, Ender/Creality with Klipper, Sovol, Elegoo …) | Moonraker | 📋 planned |
 | OctoPrint printers (Prusa MK3S/MK3S+, Ender 3 …) | OctoPrint API | 📋 planned |
 | Bambu Lab (X1, P1, A1) | MQTT on the local network | 📋 planned |
-| True-to-size models for the *Printer* view: CORE One, CORE One L, XL | – | 🛠️ in development |
+| True-to-size models for the *Printer* view: CORE One, CORE One L; the XL refined | – | 📋 planned |
 
 PrintTwin asks the printer which model it is (PrusaLink), so the *Printer* view picks the
 right one by itself; `model = "mk4s"` in the config overrides it.
@@ -40,9 +43,9 @@ independent project, not affiliated with Prusa Research.
 * **Live, not a guess**: follows the printer's own nozzle position (~80 Hz) and file
   position, so the view matches the real print to the extrusion line.
 * **The whole printer** (button *Printer*): a true-to-size MK4, MK4S or MINI+ built from
-  Prusa's CAD parts – the bed slides, the X axis rides up and down, the print head moves,
-  the spool unwinds, the display shows the live status, the MK4's heater glows with the
-  nozzle temperature.
+  Prusa's CAD parts, and an XL with up to five heads – the bed moves, the gantry and print
+  head follow the nozzle, the spool unwinds, the display shows the live status, the MK4's
+  heater glows with the nozzle temperature.
 * **Multi-material**: jobs with several tools (XL) or filaments (MMU) are drawn in each
   filament's colour; the XL shows all its heads (up to five, from the printer model in the
   job) with a spool per head – three on the left side, two on the right – parks the idle
@@ -114,7 +117,8 @@ up while the file downloads.
  PrintTwin bridge (Python, standard library only)
    printer.py   poll status every 2 s, detect jobs, get the job file (cache → slicer hand-over → download)
    bgcode.py    decode .bgcode (heatshrink + MeatPack) byte-exact like the firmware
-   toolpath.py  G-code → extrusion segments in file order, incrementally (arcs, widths, feature types)
+   toolpath.py  G-code → extrusion segments in file order, incrementally (arcs, widths, feature types,
+                tool / filament changes and colours)
    tracker.py   file position + nozzle xyz → "printed" = segment index + fraction
    server.py    HTTP + Server-Sent Events
                            ▼
@@ -171,9 +175,9 @@ domain), which uses Prusa's part frames exactly – a reference only, none of it
 used. The SuperPINDA holder is placed by the firmware's probe offset (−29, −3 mm). The
 firmware also fixes the G-code frame: X and Y home against hard stops (X 180.4 at the Z
 carriage, Y −3 at the rear plate), and those stops were measured by sliding the parts along
-their rods; at Z max 185 the carriage stops 2.5 mm under the top. The extruder rides on the Z carriage, a 275 mm
-PTFE bowden runs to the hotend, and the spool stands on the printed spool holder behind
-the column.
+their rods; at Z max 185 the carriage stops 2.5 mm under the top. The extruder rides on the
+Z carriage, a 275 mm PTFE bowden runs to the hotend, and the spool stands on the printed
+spool holder behind the column.
 
 ### The XL model (approximate)
 
@@ -196,20 +200,24 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 * `python -I tests/test_toolpath.py` – parser: `.gcode` == `.bgcode`, other slicers,
   incremental decoding; `python -I tests/test_bridge.py` – end-to-end with a simulated printer;
   `tests/test_models.py` – printer detection; `tests/test_glb_models.py` – the 3D printer models.
-* `python -I tools/sim_printer.py JOB.bgcode --kbps 18 [--handover]` – a fake PrusaLink
-  printer plus the bridge on port 8791: try PrintTwin without a printer.
+* `python -I tools/sim_printer.py JOB.bgcode --kbps 18 [--handover] [--type 3.1.0]` – a fake
+  PrusaLink printer plus the bridge on port 8791: try PrintTwin without a printer; `--type`
+  picks the printer it pretends to be (PrusaLink type codes in `printtwin/models.py`, e.g.
+  `1.4.1` MK4S, `2.1.0` MINI, `3.1.0` XL).
+* `tools/cad/build_mk4.py`, `build_mini.py`, `build_xl.py` – rebuild the 3D printer models
+  (needs CadQuery and the CAD downloads named in each script).
 * `tools/probe_api.py`, `tools/probe_metrics.py` – inspect a real printer
   (metrics recordings contain the printer's MAC address – don't publish them).
 * `tools/make_fixtures.py` – regenerate the test jobs with PrusaSlicer.
 
 ## Roadmap
 
-**More printers** (in the works – see [Supported printers](#supported-printers))
+**More printers** (see [Supported printers](#supported-printers))
 * Klipper / Moonraker, OctoPrint and Bambu Lab adapters next to PrusaLink.
-* True-to-size models for the *Printer* view: CORE One, CORE One L and XL next
-  (MK4, MK4S and MINI+ are done); generic bed-slinger / CoreXY models for everything else.
+* True-to-size models for the *Printer* view: CORE One and CORE One L next (MK4, MK4S and
+  MINI+ are done, the XL is approximate); generic bed-slinger / CoreXY models for everything else.
 
-**Inside your slicer**
+**Inside your slicer** (🛠️ in development)
 * PrintTwin right in **PrusaSlicer** and **OrcaSlicer**: both can already show a printer's
   web page in a tab (PrusaSlicer's *Physical Printer* tab, OrcaSlicer's *Device* tab). PrintTwin
   will act as that print host – the live 3D view appears inside the slicer, uploads pass
