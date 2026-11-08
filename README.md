@@ -333,9 +333,10 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 * An OctoPrint adapter next to PrusaLink, Moonraker (Klipper) and Bambu Lab.
 * Bambu Lab: a "PrintTwin for OrcaSlicer" plugin (a PrintTwin tab + the hand-over without a
   script), Bambu's CA certificates bundled, the estimate calibrated on a real printer.
-* True-to-size models for the *Printer* view: CORE One and CORE One L next (MK4, MK4S and
-  MINI+ are done, the XL is approximate), then the Voron 2.4 and Trident from the Voron CAD
-  (GPL-3.0); generic bed-slinger / CoreXY / flying-gantry models for everything else.
+* True-to-size models for the *Printer* view: Bambu Lab printers next, then CORE One and
+  CORE One L (MK4, MK4S and MINI+ are done, the XL is approximate) and the Voron 2.4 and Trident
+  from the Voron CAD (GPL-3.0); generic bed-slinger / CoreXY / flying-gantry models for
+  everything else.
 
 **Inside your slicer** (✅ PrusaLink and Klipper printers, see [above](#optional-printtwin-inside-prusaslicer--orcaslicer))
 * Next: a compact view for the slicer tab.

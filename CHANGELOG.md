@@ -2,15 +2,15 @@
 
 ## In development
 
-* More printers: OctoPrint and Bambu Lab adapters; true-to-size CORE One and CORE One L, the
-  Voron 2.4 and Trident from the Voron CAD, the XL refined with real measurements. Other
-  PrusaLink printers (MK3.9, CORE One, XL, MINI) and Klipper printers should already work –
-  test reports welcome.
+* More printers: true-to-size Bambu Lab printers in the *Printer* view; an OctoPrint adapter;
+  true-to-size CORE One and CORE One L, the Voron 2.4 and Trident from the Voron CAD, the XL
+  refined with real measurements. Other PrusaLink printers (MK3.9, CORE One, XL, MINI) and
+  Klipper printers should already work – test reports welcome.
 * Klipper: objects excluded during the print (EXCLUDE_OBJECT) shown as not printed.
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
-## Unreleased
+## 0.7.0 – Bambu Lab printers (read-only)
 
 * **Bambu Lab printers** (read-only): `kind = "bambu"` with the serial number and the LAN access
   code. Status over MQTT, the job file (.gcode.3mf) over FTPS or from the slicer's hand-over – no
