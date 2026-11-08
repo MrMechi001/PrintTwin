@@ -67,7 +67,9 @@ def allowed(kind: str, method: str, path: str) -> bool:
     """May this printer API call be passed on to a printer of this kind?"""
     if kind == "moonraker":
         return (method, path.rstrip("/")) in MOONRAKER_CALLS
-    return path == "/api/version" or path.startswith(("/api/v1/", "/api/files"))      # PrusaLink
+    if kind == "prusalink":
+        return path == "/api/version" or path.startswith(("/api/v1/", "/api/files"))
+    return False                    # Bambu printers: no print host (the slicer talks to the printer itself)
 
 
 def lan_client(ip: str) -> bool:

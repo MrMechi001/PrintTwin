@@ -32,3 +32,5 @@ jobs:
         run: python -I tests/test_mqtt.py
       - name: Bambu Lab end-to-end (simulated printer)
         run: python -I tests/test_bambu.py
+      - name: Bambu Lab job logic (offline)
+        run: python -I tests/test_bambu_adapter.py

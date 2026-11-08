@@ -27,6 +27,10 @@ class MqttError(Exception):
     pass
 
 
+class SubscribeRefused(MqttError):
+    """The broker refused a subscription (Bambu: a topic with a wrong serial number)."""
+
+
 def _varint(n: int) -> bytes:
     out = bytearray()
     while True:
@@ -46,14 +50,16 @@ class MqttClient:
     client.subscribe(f"device/{serial}/report"); client.publish(f"device/{serial}/request", json)
     then client.recv() -> (topic, payload bytes) or None on timeout; keep-alive pings are sent
     from recv(). verify=False accepts the printer's self-signed certificate (as Bambu's own
-    LAN tools do); pass cafile to pin one instead."""
+    LAN tools do); pass cafile to verify it instead, or on_tls to check it (a certificate pin)
+    after the handshake and before the user name and password are sent."""
 
     def __init__(self, host: str, port: int = 8883, username: str | None = None, password: str | None = None,
                  client_id: str = "printtwin", tls: bool = True, verify: bool = False, cafile: str | None = None,
                  server_name: str | None = None, keepalive: int = 30, timeout: float = 10.0,
-                 context: ssl.SSLContext | None = None):
+                 context: ssl.SSLContext | None = None, on_tls=None):
         """server_name: the name the certificate must carry when verifying (Bambu: the printer's
-        serial number is its certificate's CN), default the host."""
+        serial number is its certificate's CN), default the host. on_tls(sock): called right after
+        the TLS handshake, before CONNECT - raise there to send no credentials."""
         self.host, self.port = host, port
         self.username, self.password = username, password
         self.client_id = client_id
@@ -61,11 +67,13 @@ class MqttClient:
         self.server_name = server_name
         self.context = context                           # a ready TLS context (tlsutil.context) overrides the above
         self.keepalive, self.timeout = keepalive, timeout
+        self.on_tls = on_tls
         self.sock: socket.socket | None = None
         self._wlock = threading.Lock()
         self._last_out = 0.0
         self._pid = 0
         self._buf = b""
+        self._early: list[tuple[str, bytes]] = []          # messages that came before the SUBACK
 
     # ------------------------------------------------------------------ connection
     def connect(self):
@@ -83,8 +91,15 @@ class MqttClient:
                 ctx.check_hostname = False
             ctx.maximum_version = ssl.TLSVersion.TLSv1_2   # some printers (P2S) hang on a TLS 1.3 handshake
             raw = ctx.wrap_socket(raw, server_hostname=self.server_name or self.host)
+        if self.tls and self.on_tls:
+            try:
+                self.on_tls(raw)                           # e.g. the certificate pin: before any secret is sent
+            except BaseException:
+                raw.close()
+                raise
         self.sock = raw
         self._buf = b""
+        self._early = []
         flags = 0x02                                       # clean session
         payload = _str(self.client_id)
         if self.username is not None:
@@ -113,9 +128,24 @@ class MqttClient:
                 self.sock = None
 
     # ------------------------------------------------------------------ messages
-    def subscribe(self, topic: str, qos: int = 0):
+    def subscribe(self, topic: str, qos: int = 0, wait: float | None = None):
+        """Subscribe and wait (up to `wait` s, default the timeout) for the broker's answer: raises
+        SubscribeRefused when it says no. A broker that doesn't answer in time is taken as yes."""
         self._pid = self._pid % 65535 + 1
-        self._send(0x82, struct.pack("!H", self._pid) + _str(topic) + bytes([qos]))
+        pid = self._pid
+        self._send(0x82, struct.pack("!H", pid) + _str(topic) + bytes([qos]))
+        end = time.monotonic() + (self.timeout if wait is None else wait)
+        while (left := end - time.monotonic()) > 0:
+            got = self._read_packet(left, none_on_timeout=True)
+            if got is None:
+                return
+            ptype, body = got
+            if ptype & 0xF0 == 0x30:                       # a message may come before the SUBACK
+                self._early.append(self._publish(ptype, body))
+            elif ptype == 0x90 and len(body) >= 3 and struct.unpack_from("!H", body, 0)[0] == pid:
+                if body[2] == 0x80:
+                    raise SubscribeRefused(f"subscription to {topic} refused")
+                return
 
     def publish(self, topic: str, payload: bytes | str, qos: int = 0):
         if qos:
@@ -126,6 +156,8 @@ class MqttClient:
     def recv(self, timeout: float | None = None) -> tuple[str, bytes] | None:
         """The next message (topic, payload), or None when `timeout` passes without one.
         Sends keep-alive pings meanwhile; raises OSError / MqttError when the connection breaks."""
+        if self._early:
+            return self._early.pop(0)
         end = time.monotonic() + (self.timeout if timeout is None else timeout)
         while True:
             if time.monotonic() - self._last_out > self.keepalive * 0.6:
@@ -138,17 +170,20 @@ class MqttClient:
                 continue
             ptype, body = got
             if ptype & 0xF0 == 0x30:                       # PUBLISH
-                qos = (ptype >> 1) & 3
-                (tlen,) = struct.unpack_from("!H", body, 0)
-                topic = body[2:2 + tlen].decode("utf-8", "replace")
-                pos = 2 + tlen
-                if qos:
-                    (pid,) = struct.unpack_from("!H", body, pos)
-                    pos += 2
-                    if qos == 1:
-                        self._send(0x40, struct.pack("!H", pid))   # PUBACK
-                return topic, body[pos:]
+                return self._publish(ptype, body)
             # SUBACK (0x90), PINGRESP (0xD0), PUBACK (0x40): nothing to do for a reader
+
+    def _publish(self, ptype: int, body: bytes) -> tuple[str, bytes]:
+        qos = (ptype >> 1) & 3
+        (tlen,) = struct.unpack_from("!H", body, 0)
+        topic = body[2:2 + tlen].decode("utf-8", "replace")
+        pos = 2 + tlen
+        if qos:
+            (pid,) = struct.unpack_from("!H", body, pos)
+            pos += 2
+            if qos == 1:
+                self._send(0x40, struct.pack("!H", pid))   # PUBACK
+        return topic, body[pos:]
 
     # ------------------------------------------------------------------ framing
     def _send(self, header: int, body: bytes):

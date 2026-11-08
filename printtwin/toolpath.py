@@ -23,6 +23,7 @@ import math
 import re
 import struct
 import zipfile
+import zlib
 from array import array
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -63,6 +64,23 @@ META_KEYS = ("filament_colour", "bed_shape", "printer_model", "filament_type", "
 META_ALIASES = {"printable_area": "bed_shape"}   # Bambu Studio / OrcaSlicer name for the bed outline
 ASCII_TAIL = 300_000       # PrusaSlicer keeps its settings block at the end of plain .gcode, Bambu at the start
 MAX_TOOL = 63              # T255 / T1000 in Bambu start G-code are no real tools
+MAX_3MF = 1 << 30          # a .gcode.3mf is held in memory until complete: refuse bigger ones
+MAX_PLATE_GCODE = 3 << 29  # 1.5 GiB of G-code from one plate, at most ...
+MAX_INFLATE = 64           # ... and at most 64 x its compressed size (real G-code: ~5-8 x)
+MAX_CONFIG = 8 << 20       # project_settings.config / slice_info.config
+_LAYERS_RE = re.compile(rb"^; total layer number: (\d+)", re.M)
+
+
+class JobFileError(ValueError):
+    """A job file that can't be shown as it is - trying the same file again won't help."""
+
+
+class WrongJobFile(JobFileError):
+    """The file doesn't fit the job the printer runs (another plate, another layer count)."""
+
+
+class JobFileTooLarge(JobFileError):
+    """Bigger than PrintTwin unpacks (or a zip bomb)."""
 
 _WORD = re.compile(rb"([A-Z])(-?\d*\.?\d+)")
 _GNUM = re.compile(rb"G(\d+)")
@@ -409,12 +427,14 @@ class JobDecoder:
     `tp` is valid from the first byte on and only ever grows until finish();
     other threads may read it meanwhile (arrays are append-only). A .3mf is a zip whose
     directory sits at the end: it is parsed once complete. `plate`: which plate's G-code
-    (Metadata/plate_<n>.gcode) - None = the only one there is, else plate 1.
+    (Metadata/plate_<n>.gcode); None = the only one there is, else the one with `layers` layers
+    (the printer's total layer count), else plate 1 (meta["plate_guess"]).
     """
 
-    def __init__(self, plate: int | None = None):
+    def __init__(self, plate: int | None = None, layers: int | None = None):
         self.tp = Toolpath()
         self.plate = plate
+        self.layers = layers
         self.fmt: str | None = None          # "bgcode" | "gcode" | "3mf"
         self._headtext = b""                 # gcode: first ASCII_TAIL bytes (Bambu writes its settings there)
         self.bytes_in = 0
@@ -448,6 +468,8 @@ class JobDecoder:
             self._blocks()
         elif self.fmt == "3mf":
             self._buf += data                      # whole zip: parsed in finish()
+            if len(self._buf) > MAX_3MF:
+                raise JobFileTooLarge(f"job file larger than {MAX_3MF >> 20} MB")
         else:
             if len(self._headtext) < ASCII_TAIL:
                 self._headtext += data[:ASCII_TAIL - len(self._headtext)]
@@ -471,17 +493,12 @@ class JobDecoder:
             if self._parser is None:               # no G-code blocks at all
                 self._parser = GcodeParser(_nozzle_width(meta), tp=tp)
         elif self.fmt == "3mf":
-            gcode, project = self._unzip(bytes(self._buf))
-            self._buf = bytearray()
-            # what was actually sliced (the G-code's own settings block) first; the project's
-            # settings, which can be stale, only fill gaps
-            _scan_meta(meta, gcode[:ASCII_TAIL] + b"\n" + gcode[-ASCII_TAIL:])
-            for k, v in project.items():
-                meta.setdefault(k, v)
-            self._parser = GcodeParser(_nozzle_width(meta), tp=tp)
-            self._parser.feed(gcode)
+            data, self._buf = bytes(self._buf), bytearray()
+            self._parser = self._from_3mf(data)
         else:
-            _scan_meta(meta, self._headtext + b"\n" + bytes(self._buf[-ASCII_TAIL:]))
+            cut = self.bytes_in > ASCII_TAIL       # only whole lines: a cut-off value must not win
+            _scan_meta(meta, _whole(self._headtext, head=True, cut=cut) + b"\n"
+                       + _whole(bytes(self._buf[-ASCII_TAIL:]), head=False, cut=cut))
             self._buf = bytearray()
         self._parser.finish()
         if "filament_colour" in meta:
@@ -493,35 +510,106 @@ class JobDecoder:
         return tp
 
     # ------------------------------------------------------------------ Bambu .gcode.3mf
-    def _unzip(self, data: bytes) -> tuple[bytes, dict]:
-        """The plate's G-code, and the project's settings (printer, colours, bed) to fill gaps."""
-        meta, project = self.tp.meta, {}
-        with zipfile.ZipFile(io.BytesIO(data)) as z:
-            names = z.namelist()
-            plates = sorted((n for n in names if re.fullmatch(r"Metadata/plate_\d+\.gcode", n)),
-                            key=lambda n: int(re.search(r"\d+", n.rsplit("/", 1)[1]).group()))
-            if not plates:
-                raise ValueError("3mf without G-code (sliced project expected: Metadata/plate_<n>.gcode)")
-            want = f"Metadata/plate_{self.plate}.gcode" if self.plate else None
-            name = want if want in plates else plates[0]
-            meta["plate"] = int(re.search(r"(\d+)\.gcode$", name).group(1))
-            if "Metadata/project_settings.config" in names:
-                try:
-                    ps = json.loads(z.read("Metadata/project_settings.config"))
-                except ValueError:
-                    ps = {}
-                for k in ("printer_model", "filament_colour", "filament_type", "nozzle_diameter", "printable_area",
-                          "printer_structure", "printable_height"):
-                    v = ps.get(k)
-                    if v:
-                        project[META_ALIASES.get(k, k)] = ";".join(map(str, v)) if isinstance(v, list) else str(v)
-                if isinstance(ps.get("printable_area"), list):
-                    project["bed_shape"] = ",".join(ps["printable_area"])
-            m = re.search(rb'<metadata key="printer_model_id" value="([^"]*)"',
-                          z.read("Metadata/slice_info.config")) if "Metadata/slice_info.config" in names else None
-            if m and m.group(1):
-                meta["printer_model_id"] = m.group(1).decode("utf-8", "replace")
-            return z.read(name), project
+    def _from_3mf(self, data: bytes) -> "GcodeParser":
+        """Parse the plate's G-code out of the zip, in pieces (bounded memory, zip bombs refused).
+        What was actually sliced (the G-code's own settings block) wins; the project's settings,
+        which can be stale, only fill gaps."""
+        with zipfile.ZipFile(io.BytesIO(data)) as z:      # (a truncated download fails here: tried again)
+            infos = {i.filename: i for i in z.infolist()}
+            for i in infos.values():                      # Bambu Studio / Orca write deflate only
+                if i.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) and i.filename.startswith("Metadata/"):
+                    raise JobFileTooLarge(f"{i.filename}: compression {i.compress_type} not unpacked")
+            try:
+                return self._unpack(z, infos)
+            except (zipfile.BadZipFile, zlib.error, NotImplementedError, RuntimeError, EOFError) as e:
+                raise JobFileError(f"damaged job file: {e}") from e
+
+    def _unpack(self, z: zipfile.ZipFile, infos: dict) -> "GcodeParser":
+        tp, meta = self.tp, self.tp.meta
+        plates = sorted((n for n in infos if re.fullmatch(r"Metadata/plate_\d+\.gcode", n)),
+                        key=lambda n: int(re.search(r"\d+", n.rsplit("/", 1)[1]).group()))
+        if not plates:
+            raise WrongJobFile("3mf without G-code (a sliced job expected: Metadata/plate_<n>.gcode)")
+        name = self._pick_plate(z, plates)
+        meta["plate"] = int(re.search(r"(\d+)\.gcode$", name).group(1))
+        project = self._project(z, infos)
+        info = infos[name]
+        limit = min(MAX_PLATE_GCODE, MAX_INFLATE * info.compress_size + (1 << 20))
+        if info.file_size > limit:
+            raise JobFileTooLarge(f"plate G-code of {info.file_size >> 20} MB (from {info.compress_size >> 20} MB)")
+        with z.open(name) as f:
+            head = f.read(ASCII_TAIL)
+            n, tail = len(head), bytearray(head)
+            more = f.read(1 << 20)
+            _scan_meta(meta, _whole(head, head=True, cut=bool(more)))     # Bambu: settings at the start
+            parser = GcodeParser(_nozzle_width({**project, **meta}), tp=tp)
+            parser.feed(head)
+            while more:
+                n += len(more)
+                if n > limit:
+                    raise JobFileTooLarge(f"plate G-code inflates to more than {limit >> 20} MB")
+                parser.feed(more)
+                tail += more
+                if len(tail) > 2 * ASCII_TAIL:
+                    del tail[:-ASCII_TAIL]
+                more = f.read(1 << 20)
+        _scan_meta(meta, _whole(bytes(tail[-ASCII_TAIL:]), head=False, cut=n > ASCII_TAIL))
+        for k, v in project.items():
+            meta.setdefault(k, v)
+        return parser
+
+    def _pick_plate(self, z: zipfile.ZipFile, plates: list[str]) -> str:
+        meta = self.tp.meta
+        if self.plate:
+            want = f"Metadata/plate_{self.plate}.gcode"
+            if want in plates:
+                return want
+            if len(plates) == 1 and (not self.layers or _plate_layers(z, plates[0]) in (None, self.layers)):
+                meta["plate_guess"] = "renumbered"    # one plate, stored under another number
+                return plates[0]
+            raise WrongJobFile(f"plate {self.plate} is not in this job file ({', '.join(p[9:] for p in plates)})")
+        if len(plates) == 1:
+            return plates[0]
+        if self.layers:                               # P1 / A1 report no plate: the one with the printer's layer count
+            fits = [n for n in plates if _plate_layers(z, n) == self.layers]
+            if not fits:
+                raise WrongJobFile(f"no plate in this job file has {self.layers} layers")
+            if len(fits) == 1:
+                return fits[0]
+            plates = fits
+        meta["plate_guess"] = "several"
+        return plates[0]
+
+    @staticmethod
+    def _project(z: zipfile.ZipFile, infos: dict) -> dict:
+        project = {}
+
+        def read(member: str) -> bytes | None:
+            info = infos.get(member)
+            if info is None or info.file_size > MAX_CONFIG:
+                return None
+            with z.open(member) as f:
+                b = f.read(MAX_CONFIG + 1)
+            return None if len(b) > MAX_CONFIG else b
+
+        raw = read("Metadata/project_settings.config")
+        try:
+            ps = json.loads(raw) if raw else {}
+        except ValueError:
+            ps = {}
+        if not isinstance(ps, dict):
+            ps = {}
+        for k in ("printer_model", "filament_colour", "filament_type", "nozzle_diameter", "printable_area",
+                  "printer_structure", "printable_height"):
+            v = ps.get(k)
+            if v:
+                project[META_ALIASES.get(k, k)] = ";".join(map(str, v)) if isinstance(v, list) else str(v)
+        if isinstance(ps.get("printable_area"), list):
+            project["bed_shape"] = ",".join(map(str, ps["printable_area"]))
+        m = re.search(rb'<metadata key="printer_model_id" value="([^"]*)"', read("Metadata/slice_info.config") or b"")
+        if m and m.group(1):
+            project["printer_model_id"] = m.group(1).decode("utf-8", "replace")
+        return project
 
     # ------------------------------------------------------------------ bgcode blocks
     def _blocks(self):
@@ -562,9 +650,27 @@ class JobDecoder:
                     meta[k] = kv[k]
 
 
+def _whole(b: bytes, head: bool, cut: bool) -> bytes:
+    """Only the whole lines of a piece cut out of a file (its first or last bytes)."""
+    if not cut:
+        return b
+    return b[:b.rfind(b"\n") + 1] if head else b[b.find(b"\n") + 1:]
+
+
+def _plate_layers(z: zipfile.ZipFile, member: str) -> int | None:
+    """'; total layer number: N' from the head of a plate's G-code."""
+    info = z.getinfo(member)
+    if info.file_size > MAX_INFLATE * info.compress_size + (1 << 20):
+        raise JobFileTooLarge(f"{member} inflates too much")
+    with z.open(member) as f:
+        b = f.read(ASCII_TAIL + 1)
+    m = _LAYERS_RE.search(_whole(b[:ASCII_TAIL], head=True, cut=len(b) > ASCII_TAIL))
+    return int(m.group(1)) if m else None
+
+
 def _scan_meta(meta: dict, text: bytes):
     """'; key = value' settings lines (PrusaSlicer at the end, Bambu Studio at the start)."""
-    m = re.search(rb"^; total layer number: (\d+)", text, re.M)
+    m = _LAYERS_RE.search(text)
     if m and "total_layers" not in meta:
         meta["total_layers"] = int(m.group(1))
     for k in META_KEYS + tuple(META_ALIASES):
@@ -578,11 +684,11 @@ def _scan_meta(meta: dict, text: bytes):
             meta[key] = m.group(1).decode("utf-8", "replace").strip()
 
 
-def decode_bytes(buf: bytes, plate: int | None = None) -> Toolpath:
-    d = JobDecoder(plate=plate)
+def decode_bytes(buf: bytes, plate: int | None = None, layers: int | None = None) -> Toolpath:
+    d = JobDecoder(plate=plate, layers=layers)
     d.feed(buf)
     return d.finish()
 
 
-def load_file(path: Path, plate: int | None = None) -> Toolpath:
-    return decode_bytes(Path(path).read_bytes(), plate)
+def load_file(path: Path, plate: int | None = None, layers: int | None = None) -> Toolpath:
+    return decode_bytes(Path(path).read_bytes(), plate, layers)

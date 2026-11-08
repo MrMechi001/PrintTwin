@@ -28,7 +28,7 @@ PrintTwin started on the Original Prusa MK4 – **support for more printers is i
 | Prusa CORE One / CORE One L | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY model until their own is done |
 | **Klipper printers** (Voron 2.4 / Trident / V0, Sovol SV08, RatRig, Creality K1, Qidi, Elegoo, … – anything with Moonraker) | Moonraker | 🧪 new – tested against a simulated Moonraker, **testers wanted**; generic CoreXY (bed or flying gantry) or bed-slinger model |
 | OctoPrint printers (Prusa MK3S/MK3S+, Ender 3 …) | OctoPrint API | 📋 planned |
-| Bambu Lab (X1, P1, A1) | MQTT on the local network | 📋 planned |
+| **Bambu Lab** (X1, P1, P2S, X2D, A1, A1 mini, A2L, H2D/H2S/H2C) | MQTT + FTPS on the local network (read-only) | 🧪 new – tested against a simulated printer, **testers wanted**; position *estimated* from layer and progress (Bambu printers report no nozzle position); generic CoreXY / bed-slinger model |
 | True-to-size models for the *Printer* view: CORE One, CORE One L; the XL refined | – | 📋 planned |
 
 PrintTwin asks the printer which model it is (PrusaLink), so the *Printer* view picks the
@@ -104,6 +104,36 @@ PrintTwin reads Klipper's status, the file position and the live toolhead positi
 updates it 4 times a second; in between the nozzle follows the toolpath) and loads the job
 file from Moonraker. Klipper prints plain `.gcode` only. Nothing to set up on the printer.
 
+### Bambu Lab printers
+
+A `[[printer]]` block with `kind = "bambu"`:
+
+```toml
+[[printer]]
+id = "p1s"
+name = "Bambu Lab P1S"
+kind = "bambu"
+host = "192.168.1.40"         # the printer's IP address
+serial = "01P00A..."          # printer screen: Settings -> Device (the serial number)
+access_code = "12345678"      # printer screen: Settings -> Network / WLAN (LAN access code)
+```
+
+PrintTwin only **reads**: the status over MQTT and the job file over FTPS – no printer control,
+no Bambu cloud, no Developer Mode needed. Bambu printers report the layer and the percent of the
+print but **no nozzle position**, so the position in the 3D view is *estimated* between the
+slicer's progress marks in the job (the HUD says so) – coarser than on a Prusa or Klipper printer.
+The printer model comes from the serial number.
+
+The job file: X1, P1 and A1 keep it where PrintTwin can download it. The H2D / H2S / H2C, P2S and
+X2D print from internal storage, which is not reachable – turn on *Store sent files on external
+storage* (print options) and insert a USB stick / SD card, or use the hand-over below (the viewer
+says so when it can't find the file). An older file under the same name (an earlier version of the
+job) is not taken while this print's may still show up, and a file whose layer count doesn't match
+what the printer reports is dropped; printing the same job again starts over.
+On first contact PrintTwin remembers the printer's certificate and refuses a different one later,
+before it sends the access code (delete `cache/tls/<serial>-*.sha256` after replacing or resetting
+the printer).
+
 ### Optional: PrintTwin inside PrusaSlicer / OrcaSlicer
 
 Set PrintTwin as the slicer's print host: the printer tab of the slicer then shows the live
@@ -140,9 +170,15 @@ addresses. OrcaSlicer's experimental "printer agent" (off by default) is not sup
 OrcaSlicer only: to keep uploading straight to the printer and only show PrintTwin, leave
 the printer as host and put the PrintTwin address into *Device UI* (`print_host_webui`).
 
-### Optional: let PrusaSlicer hand over each job (model ready ~2 s after the start)
+### Optional: let the slicer hand over each job (model ready ~2 s after the start)
 
-Not needed if PrintTwin is your print host (above) – for uploads via Prusa Connect or USB stick.
+Not needed if PrintTwin is your print host (above) – for uploads via Prusa Connect or USB stick,
+and for **Bambu Lab** printers (Bambu Studio and OrcaSlicer: *Process → Others → Post-processing
+scripts*, same line as below): the job is then there even when the printer prints from internal
+storage, and PrintTwin doesn't have to download it. Bambu Studio hands over every slice under a
+temporary name, so PrintTwin takes the slice with the printer's layer count that was made in the
+12 hours before the print started; when several different slices fit (two plates of the same
+height), it tries the printer's own file first.
 
 Downloading the job file from the printer over Wi-Fi is slow (~18 KB/s during a print).
 PrusaSlicer runs post-processing scripts on the finished file – exactly the bytes it then
@@ -164,7 +200,8 @@ up while the file downloads.
   stop or change anything on its own.
 * As the slicer's print host (`[slicer] print_host = true`, off by default) it passes the
   slicer's calls on to the printer – with the key the slicer sends, never with its own. Without
-  the printer's API key nobody can upload or print through it. Klipper printers usually trust
+  the printer's API key nobody can upload or print through it. Bambu printers are only read:
+  PrintTwin only asks them for their status and firmware version. Klipper printers usually trust
   the whole LAN (Moonraker `trusted_clients`): there PrintTwin passes on only uploads and the
   start of an uploaded file, and only from LAN addresses unless the slicer sends Moonraker's
   API key.
@@ -189,6 +226,7 @@ up while the file downloads.
    tracker.py   file position + nozzle xyz → "printed" = segment index + fraction
    server.py    HTTP + Server-Sent Events
    moonraker.py   Klipper printers: Moonraker status ~4 Hz (file position, live toolhead position)
+   bambu.py       Bambu Lab printers: MQTT status ~1 Hz, job file over FTPS, position estimated (mqtt.py, ftps.py)
    slicerhost.py  print host for PrusaSlicer / OrcaSlicer: the slicer's calls passed through, uploads kept
                            ▼
  web/ (three.js)  one instanced draw call for all segments; a single uniform
@@ -268,7 +306,8 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 * `python -I tests/test_toolpath.py` – parser: `.gcode` == `.bgcode`, other slicers,
   incremental decoding; `python -I tests/test_bridge.py` – end-to-end with a simulated printer;
-  `tests/test_slicerhost.py` – the slicer print host; `tests/test_moonraker.py` – Klipper
+  `tests/test_slicerhost.py` – the slicer print host; `tests/test_bambu.py` – Bambu Lab printers
+  end to end; `tests/test_mqtt.py` – the MQTT client; `tests/test_moonraker.py` – Klipper
   printers end to end; `tests/test_models.py` – printer detection; `tests/test_glb_models.py`
   – the 3D printer models.
 * `python -I tools/sim_printer.py JOB.bgcode --kbps 18 [--handover] [--type 3.1.0]` – a fake
@@ -277,6 +316,8 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
   `1.4.1` MK4S, `2.1.0` MINI, `3.1.0` XL). It is also a print host for a slicer:
   `http://localhost:8791/p/sim`, host type PrusaLink, API key `sim` – *Upload and print*
   makes the upload the simulated job.
+* `python -I tools/sim_bambu.py JOB.gcode.3mf [--style p1|x1] [--internal] [--handover] [--pin]` – a
+  simulated Bambu printer (TLS MQTT + FTPS, needs the openssl tool) plus the bridge on port 8796.
 * `python -I tools/sim_moonraker.py JOB.gcode [--qgl] [--duration 120] [--api-key K] [--rewrite]`
   – the same for a Klipper printer: a simulated Moonraker (port 7125) plus the bridge on
   port 8793; print host `http://localhost:8793/p/sim`, host type Klipper (via Moonraker).
@@ -289,7 +330,9 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 **More printers** (see [Supported printers](#supported-printers))
-* OctoPrint and Bambu Lab adapters next to PrusaLink and Moonraker (Klipper).
+* An OctoPrint adapter next to PrusaLink, Moonraker (Klipper) and Bambu Lab.
+* Bambu Lab: a "PrintTwin for OrcaSlicer" plugin (a PrintTwin tab + the hand-over without a
+  script), Bambu's CA certificates bundled, the estimate calibrated on a real printer.
 * True-to-size models for the *Printer* view: CORE One and CORE One L next (MK4, MK4S and
   MINI+ are done, the XL is approximate), then the Voron 2.4 and Trident from the Voron CAD
   (GPL-3.0); generic bed-slinger / CoreXY / flying-gantry models for everything else.

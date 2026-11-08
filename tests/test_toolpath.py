@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from printtwin import bgcode  # noqa: E402
 from printtwin.config import ROOT  # noqa: E402
 from printtwin.metrics import parse_datagram  # noqa: E402
-from printtwin.toolpath import TYPE_ID, TYPES, JobDecoder, decode_bytes, load_file, parse_gcode  # noqa: E402
+from printtwin.toolpath import (TYPE_ID, TYPES, JobDecoder, JobFileError, JobFileTooLarge, WrongJobFile,  # noqa: E402
+                                decode_bytes, load_file, parse_gcode)
 from printtwin.tracker import Tracker  # noqa: E402
 import random  # noqa: E402
 
@@ -258,6 +259,62 @@ for k in range(0, len(three), 1000):            # arrives in pieces, like a down
 t2 = d2.finish()
 check(".gcode.3mf: plate 2 when asked, fed in pieces", t2.meta.get("plate") == 2 and len(t2.layer_z) == 6,
       f"plate {t2.meta.get('plate')}, {len(t2.layer_z)} layers")
+
+check(".gcode.3mf: no plate given, two plates: plate 1, marked as a guess", t1.meta.get("plate_guess") == "several")
+t6 = decode_bytes(three, layers=6)
+check(".gcode.3mf: no plate given (P1 / A1): the plate with the printer's layer count", t6.meta.get("plate") == 2
+      and len(t6.layer_z) == 6 and not t6.meta.get("plate_guess"), f"plate {t6.meta.get('plate')}")
+for args, what in (({"layers": 5}, "no plate with the printer's layer count"), ({"plate": 3}, "the plate asked for is missing")):
+    try:
+        decode_bytes(three, **args)
+        check(f".gcode.3mf: {what} -> WrongJobFile", False)
+    except WrongJobFile as e:
+        check(f".gcode.3mf: {what} -> WrongJobFile, not plate 1", True, str(e))
+one = io.BytesIO()
+with zipfile.ZipFile(one, "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("Metadata/plate_1.gcode", bambu_gcode(4))
+o = decode_bytes(one.getvalue(), plate=2, layers=4)
+check(".gcode.3mf: one plate stored under another number, layer count fits: taken (as a guess)",
+      o.meta.get("plate") == 1 and o.meta.get("plate_guess") == "renumbered")
+bomb = io.BytesIO()
+with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("Metadata/plate_1.gcode", b"; total layer number: 1\n" + b"G4\n" * 8_000_000)
+try:
+    decode_bytes(bomb.getvalue())
+    check(f".gcode.3mf: zip bomb ({len(bomb.getvalue()) >> 10} KB -> 24 MB of G-code) refused", False)
+except JobFileTooLarge as e:
+    check(f".gcode.3mf: zip bomb ({len(bomb.getvalue()) >> 10} KB -> 24 MB of G-code) refused", True, str(e))
+
+bz = io.BytesIO()
+with zipfile.ZipFile(bz, "w", zipfile.ZIP_BZIP2) as z:            # bzip2 inflates in one go: never unpacked
+    z.writestr("Metadata/plate_1.gcode", bambu_gcode(3))
+try:
+    decode_bytes(bz.getvalue())
+    check(".gcode.3mf: a member that isn't deflate (bzip2) is refused", False)
+except JobFileTooLarge as e:
+    check(".gcode.3mf: a member that isn't deflate (bzip2) is refused", True, str(e))
+bad = bytearray(one.getvalue())
+k = bad.index(b"PK\x01\x02") + 16                                 # the CRC in the central directory
+bad[k:k + 4] = b"\x00\x00\x00\x00"
+k = bad.index(b"PK\x03\x04") + 14                                 # ... and in the local header
+bad[k:k + 4] = b"\x00\x00\x00\x00"
+try:
+    decode_bytes(bytes(bad))
+    check(".gcode.3mf: a damaged member (bad CRC) is a permanent error, not retried", False)
+except JobFileError as e:
+    check(".gcode.3mf: a damaged member (bad CRC) is a permanent error, not retried", True, str(e)[:60])
+
+# a settings line cut by the 300 KB head must not win over the whole line at the end (PrusaSlicer layout)
+src = (ROOT / "tests" / "fixtures" / "sample.gcode").read_bytes()
+at = src.index(b"; printer_model = ")
+pad = 300_000 - 20 - at                         # the cut falls between "MK" and "4IS"
+cutf = b"; " + b"p" * (pad - 3) + b"\n" + src
+dc = JobDecoder()
+for k in range(0, len(cutf), 65536):
+    dc.feed(cutf[k:k + 65536])
+cm = dc.finish().meta
+check("plain .gcode: a settings line cut at the 300 KB mark doesn't win (printer_model)", cm.get("printer_model") == "MK4IS"
+      and cm.get("bed_shape") == "0x0,250x0,250x210,0x210", f"{cm.get('printer_model')!r}")
 
 ab = decode_bytes(bambu_gcode(2, "#FF000080;#00AE42FF"))
 check("colours with alpha (#RRGGBBAA)", ab.info()["filament_colours"] == ["#FF0000", "#00AE42"], str(ab.info()["filament_colours"]))

@@ -107,7 +107,7 @@ def make_handler(printers: dict, port: int, slicer: bool = False, log=print):
                 elif rest in ("", "/", "/index.html") and self.command in ("GET", "HEAD"):
                     self._send(302, b"", "text/plain", {"Location": f"/?p={quote(p.id)}"})
                 elif slicerhost.is_printer_api(rest) or rest.startswith("/api/"):   # (403 unless allowed)
-                    if (self.headers.get("Authorization") or "").lower().startswith("digest"):
+                    if p.kind != "bambu" and (self.headers.get("Authorization") or "").lower().startswith("digest"):
                         # the digest hash covers the URL the slicer asked for (/p/<id>/api/...), the
                         # printer checks it against its own (/api/...): it can never match here
                         self._json({"error": "HTTP digest login does not work through /p/<printer id>: in the "
@@ -129,6 +129,10 @@ def make_handler(printers: dict, port: int, slicer: bool = False, log=print):
             return True
 
         def _pass(self, p, path_qs: str):
+            if p.kind == "bambu":
+                return self._json({"error": "Bambu Lab printers have no print host in PrintTwin: send the job from "
+                                            "Bambu Studio / OrcaSlicer to the printer itself (the slicer hand-over "
+                                            f"gives PrintTwin a copy); the 3D view is at /p/{p.id}"}, 403)
             if not slicer:
                 return self._json({"error": "PrintTwin is not set up as print host - add  [slicer]  "
                                             "print_host = true  to config.local.toml and restart PrintTwin"}, 403)

@@ -3,7 +3,9 @@
 usage: python -I tests/test_mqtt.py
 Like a Bambu Lab printer's local broker: user name + access code, a subscription to the
 report topic, a "pushall" request, a large status message (3-byte length), a QoS 1 message
-that needs a PUBACK, keep-alive pings and a refused login.
+that needs a PUBACK, keep-alive pings and a refused login; a refused subscription (wrong
+serial), a message before the SUBACK, and a certificate check that runs before the access code
+is sent.
 """
 import json
 import socket
@@ -15,7 +17,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from printtwin.mqtt import MqttClient, MqttError, _varint  # noqa: E402
+from printtwin.mqtt import MqttClient, MqttError, SubscribeRefused, _varint  # noqa: E402
 
 failures = 0
 SERIAL = "01S00C123456789"
@@ -52,8 +54,8 @@ def mstr(b, pos):
 class FakeBroker:
     """One client at a time; records what it receives."""
 
-    def __init__(self, password="12345678", tls_ctx=None):
-        self.password = password
+    def __init__(self, password="12345678", tls_ctx=None, early=False):
+        self.password, self.early = password, early
         self.srv = socket.socket()
         self.srv.bind(("127.0.0.1", 0))
         self.srv.listen(2)
@@ -76,6 +78,8 @@ class FakeBroker:
     def client(self, conn):
         with conn:
             ptype, body = read_packet(conn)
+            if ptype != 0x10:
+                return                                   # no CONNECT (the client refused the certificate)
             proto, pos = mstr(body, 0)
             level, flags = body[pos], body[pos + 1]
             pos += 4
@@ -96,7 +100,12 @@ class FakeBroker:
                     pid = body[:2]
                     topic, pos = mstr(body, 2)
                     self.seen["subscribe"].append(topic)
-                    conn.sendall(bytes([0x90, 3]) + pid + bytes([0]))
+                    if self.early:                           # a report may come before the SUBACK
+                        rep = f"device/{SERIAL}/report"
+                        tb = struct.pack("!H", len(rep)) + rep.encode()
+                        msg = b'{"print": {"early": 1}}'
+                        conn.sendall(bytes([0x30]) + _varint(len(tb) + len(msg)) + tb + msg)
+                    conn.sendall(bytes([0x90, 3]) + pid + bytes([0 if SERIAL in topic else 0x80]))
                 elif t == 0x30:                              # PUBLISH from the client (the request)
                     topic, pos = mstr(body, 0)
                     self.seen["publish"].append((topic, body[pos:]))
@@ -139,6 +148,24 @@ check("recv() times out with None, keep-alive pings sent meanwhile", none is Non
       and 2.3 < time.monotonic() - t0 < 4.0, f"pings {broker.seen['pings']}")
 c.close()
 
+r = MqttClient("127.0.0.1", broker.port, "bblp", "12345678", tls=False)
+r.connect()
+try:
+    r.subscribe("device/01s00c123456789/report")
+    check("a refused subscription (wrong serial) raises", False)
+except SubscribeRefused as e:
+    check("a refused subscription (wrong serial) raises", "refused" in str(e), str(e))
+r.close()
+
+eb = FakeBroker(early=True)
+e = MqttClient("127.0.0.1", eb.port, "bblp", "12345678", tls=False)
+e.connect()
+e.subscribe(f"device/{SERIAL}/report")
+em = e.recv(2)
+check("a message that came before the SUBACK is not lost", em is not None and json.loads(em[1]) == {"print": {"early": 1}},
+      str(em))
+e.close()
+
 bad = MqttClient("127.0.0.1", broker.port, "bblp", "wrong", tls=False)
 try:
     bad.connect()
@@ -172,6 +199,21 @@ if openssl:
                       m is not None and json.loads(m[1])["print"]["gcode_state"] == "RUNNING")
             finally:
                 tc.close()
+            tls_broker.seen["connect"] = None
+
+            def refuse(sock):
+                raise ssl.SSLError("pin mismatch (test)")
+            pc = MqttClient("127.0.0.1", tls_broker.port, "bblp", "SECRET-CODE", tls=True, on_tls=refuse)
+            try:
+                pc.connect()
+                check("on_tls refusing the certificate: connect fails", False)
+            except ssl.SSLError:
+                pass
+            finally:
+                pc.close()
+            time.sleep(0.5)
+            check("on_tls refusing the certificate: the access code was never sent", tls_broker.seen["connect"] is None,
+                  str(tls_broker.seen["connect"]))
             strict = MqttClient("127.0.0.1", tls_broker.port, "bblp", "12345678", tls=True, verify=True)
             try:
                 strict.connect()

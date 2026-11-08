@@ -16,7 +16,14 @@ usage: python -I tools/sim_bambu.py JOB [--serial 01P00A000000001] [--style p1|x
   --internal   like an H2D printing from internal storage: the file is never on FTPS
   --pin        no CA in the bridge config: PrintTwin pins the certificate on first contact
   --handover   put the plate G-code into the hand-over folder first, like the slicer hook does
+               (under a temporary name, as Bambu Studio / OrcaSlicer hand it over)
   --wrong-code give the bridge a wrong access code (to see it refused)
+  --config-serial S   give the bridge this serial number (a typo: the printer refuses the topic)
+  --name N     the job name the printer reports (characters a file name can't hold are stored as
+               hex, '/' -> '2f', like the printer does)
+  --repeat     print the job a second time after it finished (same name, file and task id);
+               --then JOB2 prints JOB2 the second time (re-sliced under the same name)
+  --stale OLD  an earlier print's file with the same name is on the printer (9 days old)
 Viewer: http://localhost:<port>/
 """
 from __future__ import annotations
@@ -65,14 +72,18 @@ def make_certs(folder: Path, serial: str) -> tuple[Path, Path, Path]:
 class Print:
     """The simulated job: its marks, and where it is at a given time."""
 
-    def __init__(self, job_3mf: Path, name: str, heat: float, duration: float):
+    def __init__(self, job_3mf: Path, name: str, heat: float, duration: float, t0: float | None = None):
         self.path, self.name, self.heat, self.duration = job_3mf, name, heat, duration
         tp = load_file(job_3mf)
         self.n = max(1, tp.count)
         self.layer_marks = tp.layer_marks or [(s, i + 1) for i, s in enumerate(tp.layer_start)]
         self.progress_marks = tp.progress_marks
         self.total_layers = tp.meta.get("total_layers") or len(tp.layer_z)
-        self.t0 = time.time()
+        self.t0 = time.time() if t0 is None else t0
+
+    @property
+    def end(self) -> float:
+        return self.t0 + self.heat + self.duration
 
     def at(self, now: float) -> dict:
         t = now - self.t0
@@ -132,10 +143,14 @@ def _mstr(b: bytes, pos: int):
 
 
 class MqttBroker:
-    def __init__(self, port: int, ctx: ssl.SSLContext, serial: str, code: str, status, style: str):
+    def __init__(self, port: int, ctx: ssl.SSLContext, serial: str, code: str, status, style: str,
+                 drop_after: float | None = None):
+        """drop_after: close every client this many seconds after its login (a broker with too many clients)."""
         self.serial, self.code, self.status, self.style = serial, code, status, style
+        self.drop_after = drop_after
         self.srv = ctx.wrap_socket(socket.create_server(("127.0.0.1", port)), server_side=True)
         self.clients = 0
+        self.pushalls = 0
         threading.Thread(target=self._accept, daemon=True).start()
 
     def _accept(self):
@@ -172,6 +187,13 @@ class MqttBroker:
                 return
             c.sendall(bytes([0x20, 2, 0, 0]))
             self.clients += 1
+            if self.drop_after:
+                def drop():
+                    try:
+                        c.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+                threading.Timer(self.drop_after, drop).start()
             subscribed, last = threading.Event(), {}
 
             def pusher():
@@ -213,6 +235,7 @@ class MqttBroker:
                     except ValueError:
                         continue
                     if req.get("pushing", {}).get("command") == "pushall":
+                        self.pushalls += 1
                         full = self.status()
                         last.clear()
                         last.update(full)
@@ -229,8 +252,12 @@ class MqttBroker:
 
 # ---------------------------------------------------------------- FTPS server
 class FtpsServer:
-    def __init__(self, port: int, ctx: ssl.SSLContext, root: Path, code: str):
+    def __init__(self, port: int, ctx: ssl.SSLContext, root: Path, code: str, data_ctx: ssl.SSLContext | None = None,
+                 plain_data: bool = False):
+        """data_ctx: another certificate on the data channel (a test of the client's checks);
+        plain_data: the data channel stays plain even under PROT P (TLS there fails, as on an A1)."""
         self.ctx, self.root, self.code = ctx, root, code
+        self.data_ctx, self.plain_data = data_ctx or ctx, plain_data
         self.srv = socket.create_server(("127.0.0.1", port))
         self.sessions = 0
         threading.Thread(target=self._accept, daemon=True).start()
@@ -329,10 +356,22 @@ class FtpsServer:
                         say(f"150 Opening BINARY mode data connection for {arg} ({p.stat().st_size} bytes).")
                         payload = p.read_bytes()[rest:]
                         rest = 0
-                    data = self.ctx.wrap_socket(data_raw, server_side=True) if prot_p else data_raw
+                    tls = prot_p and not self.plain_data
+                    try:
+                        data = self.data_ctx.wrap_socket(data_raw, server_side=True) if tls else data_raw
+                    except (ssl.SSLError, OSError):
+                        data_raw.close()
+                        say("425 Cannot open data connection.")
+                        continue
                     try:
                         for k in range(0, len(payload), 65536):
                             data.sendall(payload[k:k + 65536])
+                        if tls:                      # vsFTPd ends the data channel's TLS properly
+                            data.settimeout(2)
+                            try:
+                                data.unwrap()
+                            except (OSError, ssl.SSLError):
+                                pass
                     finally:
                         data.close()
                     say("226 Directory send OK." if cmd == "LIST" else "226 Transfer complete.")
@@ -374,6 +413,12 @@ def main():
     ap.add_argument("--pin", action="store_true")
     ap.add_argument("--handover", action="store_true")
     ap.add_argument("--wrong-code", action="store_true")
+    ap.add_argument("--config-serial")
+    ap.add_argument("--name")
+    ap.add_argument("--repeat", action="store_true")
+    ap.add_argument("--then", type=Path)
+    ap.add_argument("--gap", type=float, default=4.0, help="--repeat: seconds between the two prints")
+    ap.add_argument("--stale", type=Path)
     ap.add_argument("--port", type=int, default=8796)
     ap.add_argument("--mqtt-port", type=int, default=18883)
     ap.add_argument("--ftps-port", type=int, default=18990)
@@ -387,37 +432,58 @@ def main():
     sctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     sctx.load_cert_chain(str(dev), str(dev_key))
 
-    name = a.job.name.split(".")[0]
-    staged = SIM / f"{name}.gcode.3mf"
+    name = a.name or a.job.name.split(".")[0]
+    stored = "".join(format(ord(c), "02x") if c in '\\/:*?"<>|' else c for c in name)   # as the printer stores it
+    staged = SIM / "job1.gcode.3mf"
     as_3mf(a.job, staged)
+    staged2 = staged
+    if a.then:
+        staged2 = SIM / "job2.gcode.3mf"
+        as_3mf(a.then, staged2)
     pr = Print(staged, name, a.heat, a.duration)
-    if a.handover:                                   # what the post-processing hook would have stored
-        with zipfile.ZipFile(staged) as z:
-            plate = SIM / f"{name}_plate_1.gcode"
+    runs = [pr] + ([Print(staged2, name, a.heat, a.duration, t0=pr.end + a.gap)] if a.repeat else [])
+
+    def handover(job_3mf: Path, n: int):            # what the post-processing hook would have stored
+        with zipfile.ZipFile(job_3mf) as z:
+            plate = SIM / f".{12345 + n}.0.gcode"    # Bambu Studio's temporary file name
             plate.write_bytes(z.read("Metadata/plate_1.gcode"))
-        incoming.store(plate, f"{name}.gcode", "BambuStudio", SIM / "incoming")
-    target = sd / "cache" / f"{name}.gcode.3mf" if a.style == "x1" else sd / f"{name}.gcode.3mf"
+        incoming.store(plate, str(plate), "File", SIM / "incoming")
+
+    if a.handover:
+        handover(staged, 1)
+    target = sd / "cache" / f"{stored}.gcode.3mf" if a.style == "x1" else sd / f"{stored}.gcode.3mf"
+    if a.stale:                                      # an earlier print's file under the same name
+        as_3mf(a.stale, target)
+        old = time.time() - 9 * 86400
+        import os
+        os.utime(target, (old, old))
 
     def place_file():
         """p1: the file is there from the start; x1: it shows up `late` s into RUNNING, growing for 2 s."""
-        if a.internal:
-            return
-        if a.style == "p1":
-            shutil.copyfile(staged, target)
-            return
-        time.sleep(a.heat + a.late)
-        data = staged.read_bytes()
-        target.write_bytes(data[: len(data) // 3])
-        time.sleep(2.0)
-        target.write_bytes(data)
+        for k, run in enumerate(runs):
+            time.sleep(max(0.0, run.t0 - time.time() - 0.5))
+            if k and a.handover and run.path != staged:
+                handover(run.path, 2)                # the re-sliced job was handed over too
+            if a.internal:
+                continue
+            if a.style == "p1":
+                shutil.copyfile(run.path, target)
+                continue
+            time.sleep(max(0.0, run.t0 + a.heat + a.late - time.time()))
+            data = run.path.read_bytes()
+            target.write_bytes(data[: len(data) // 3])
+            time.sleep(2.0)
+            target.write_bytes(data)
 
     threading.Thread(target=place_file, daemon=True).start()
 
     def status():
-        s = pr.at(time.time())
+        now = time.time()
+        run = next((r for r in reversed(runs) if now >= r.t0), runs[0])     # the second print once it began
+        s = run.at(now)
         gfile = "/data/Metadata/plate_1.gcode" if a.style == "x1" else f"{name}.gcode.3mf"
         return {**s, "gcode_file": gfile, "subtask_name": name, "print_type": "local", "task_id": "0",
-                "total_layer_num": pr.total_layers, "spd_lvl": 2, "spd_mag": 100, "cooling_fan_speed": "10",
+                "total_layer_num": run.total_layers, "spd_lvl": 2, "spd_mag": 100, "cooling_fan_speed": "10",
                 "heatbreak_fan_speed": "15", "plate_idx": 1, "print_error": 0, "mc_print_stage": "2"}
 
     MqttBroker(a.mqtt_port, sctx, a.serial, a.access_code, status, a.style)
@@ -430,7 +496,7 @@ def main():
     cfg.write_text(
         f'cache_dir = "{(SIM / "cache").as_posix()}"\nincoming_dir = "{(SIM / "incoming").as_posix()}"\n\n'
         f'[[printer]]\nid = "sim"\nname = "Simulated Bambu printer"\nkind = "bambu"\nhost = "127.0.0.1"\n'
-        f'serial = "{a.serial}"\naccess_code = "{"87654321" if a.wrong_code else a.access_code}"\n'
+        f'serial = "{a.config_serial or a.serial}"\naccess_code = "{"87654321" if a.wrong_code else a.access_code}"\n'
         f'mqtt_port = {a.mqtt_port}\nftps_port = {a.ftps_port}\n'
         + ("" if a.pin else f'cafile = "{ca.as_posix()}"\n')
         + f'\n[server]\nlisten_host = "127.0.0.1"\nport = {a.port}\n\n'

@@ -18,6 +18,16 @@ api_key = "PRUSALINK-API-KEY"   # printer: Settings > Network > PrusaLink
 # host = "voron.local"
 # api_key = ""                  # only if Moonraker asks for one
 
+# A Bambu Lab printer (read-only): the serial number and the LAN access code from the printer's screen
+# [[printer]]
+# id = "p1s"
+# name = "Bambu Lab P1S"
+# kind = "bambu"
+# host = "192.168.x.y"
+# serial = "01P00A..."
+# access_code = "12345678"
+# cafile = "..."                # Bambu's CA (optional: else the certificate is pinned on first contact)
+
 [server]
 listen_host = "0.0.0.0"         # 0.0.0.0 = reachable from other devices on the LAN/Tailscale
 port = 8790

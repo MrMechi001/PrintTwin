@@ -666,11 +666,20 @@ function onState(s) {
         ? `Job file ${pct} % (${kb}) – the model builds as it arrives${s.ahead ? ' · printer is ahead, catching up' : ''}`
         : `Fetching job file from printer… ${pct} % (${kb})`;
     } else if (L.phase === 'parse') {
-      ld.textContent = L.source === 'slicer' ? 'Using the copy PrusaSlicer handed over…' : 'Building toolpath…';
+      ld.textContent = L.source === 'slicer' ? 'Using the copy the slicer handed over…' : 'Building toolpath…';
+    } else if (L.phase === 'search') {
+      ld.textContent = L.message ? L.message.charAt(0).toUpperCase() + L.message.slice(1) : 'Looking for the job file…';
     } else ld.textContent = `Toolpath failed: ${L.message || 'unknown error'}`;
   } else ld.hidden = true;
 
-  if (s.toolpath_key && (!tp || tp.key !== s.toolpath_key)) {
+  if (!s.toolpath_key && tp && !loadingKey) {   // a new print whose file isn't there yet: not the old model
+    bedGroup.remove(tp.printed, tp.ghost);
+    tp.geo.dispose();
+    tp = null;
+    buf_.length = 0;
+    $('layer').textContent = 'Layer –';
+    $('z').textContent = 'Z –';
+  } else if (s.toolpath_key && (!tp || tp.key !== s.toolpath_key)) {
     if (loadingKey !== s.toolpath_key) loadToolpath(s.toolpath_key);
   } else if (tp && !loadingKey && (s.toolpath_count > tp.n || (s.toolpath_complete && !tp.complete))) {
     growToolpath();

@@ -92,30 +92,33 @@ def _total_layers(path: Path) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def find_bambu(total_layers: int | None, name: str | None, folder: Path = INCOMING,
-               max_age: float = 6 * 3600) -> Path | None:
-    """A Bambu job handed over by the slicer's post-processing hook. The printer reports no file size
-    (it stores a .gcode.3mf, the hook sees the plate G-code), so: a recent hand-over with the same
-    total layer count ("; total layer number: N"); one whose name contains the job name wins, then
-    the newest."""
+def find_bambu(total_layers: int | None, folder: Path = INCOMING, not_before: float | None = None,
+               not_after: float | None = None, exclude=()) -> list[tuple[float, str, Path]]:
+    """Bambu jobs handed over by the slicer's post-processing hook that fit: [(time, sha256, file)],
+    oldest first.
+
+    The printer reports no file size (it stores a .gcode.3mf, the hook sees the plate G-code) and
+    Bambu Studio / OrcaSlicer hand over a temporary file name, so a hand-over fits when it has the
+    printer's total layer count ("; total layer number: N") and was sliced between `not_before`
+    and `not_after` (a slice made after the print started can't be its file). `exclude`: paths
+    already found wrong. Several different sha256 = ambiguous (the caller decides)."""
     if not total_layers or not folder.is_dir():
-        return None
-    want = _norm(name)
-    best, best_rank = None, None
-    now = time.time()
+        return []
+    fits = []
     for side in folder.glob("*.json"):
         try:
             meta = json.loads(side.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            t = float(meta.get("time", 0))
+        except (OSError, ValueError, TypeError):
             continue
         f = folder / str(meta.get("file", ""))
-        t = float(meta.get("time", 0))
-        if now - t > max_age or not f.is_file() or _total_layers(f) != total_layers:
+        if (not_before is not None and t < not_before) or (not_after is not None and t > not_after):
             continue
-        rank = (bool(want) and want in _norm(meta.get("name")), t)
-        if best_rank is None or rank > best_rank:
-            best, best_rank = f, rank
-    return best
+        if str(f) in exclude or not f.is_file() or _total_layers(f) != total_layers:
+            continue
+        fits.append((t, str(meta.get("sha256") or f.name), f))
+    fits.sort(key=lambda e: e[0])
+    return fits
 
 
 def copy_to(src: Path, dst: Path):

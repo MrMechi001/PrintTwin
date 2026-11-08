@@ -75,8 +75,9 @@ def main(argv=None):
         return False
     pending = [pc.get("id", "?") for pc in cfg.get("printer", []) if _incomplete(pc)]
     if pending or not cfg.get("printer"):
-        print(f"Please enter your printer's IP address and PrusaLink API key in "
-              f"{args.config or config.DEFAULT_CONFIG} (printer {', '.join(pending) or '- none configured -'}).")
+        print(f"Please enter your printer's IP address and its PrusaLink API key (Bambu Lab: serial number and "
+              f"LAN access code) in {args.config or config.DEFAULT_CONFIG} "
+              f"(printer {', '.join(pending) or '- none configured -'}).")
         sys.exit(1)
     cache = Path(cfg.get("cache_dir") or ROOT / "cache")
     cache.mkdir(parents=True, exist_ok=True)
@@ -119,8 +120,9 @@ def main(argv=None):
         host_type = {"prusalink": "PrusaLink, the printer's API key",
                      "moonraker": 'Klipper (via Moonraker) / Moonraker (Klipper) or OctoPrint'}
         for p in printers.values():
-            log(f"print host for PrusaSlicer / OrcaSlicer: http://<this PC>:{s['port']}/p/{p.id}  "
-                f"(host type {host_type.get(p.kind, p.kind)})")
+            if p.kind in host_type:         # Bambu printers: the slicer sends to the printer itself
+                log(f"print host for PrusaSlicer / OrcaSlicer: http://<this PC>:{s['port']}/p/{p.id}  "
+                    f"(host type {host_type[p.kind]})")
     if args.open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:

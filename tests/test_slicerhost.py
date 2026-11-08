@@ -311,6 +311,9 @@ def main():
     check("Moonraker: upload passes, G-code does not", slicerhost.allowed("moonraker", "POST", "/server/files/upload")
           and not slicerhost.allowed("moonraker", "POST", "/printer/gcode/script")
           and not slicerhost.allowed("moonraker", "GET", "/server/files/gcodes/x.gcode"))
+    check("Bambu printers: nothing is passed on (no print host)", not any(
+        slicerhost.allowed("bambu", m, p) for m, p in [("GET", "/api/version"), ("PUT", "/api/v1/files/usb/x.gcode"),
+                                                        ("POST", "/server/files/upload")]))
 
     # printer switched off
     printers["mk4"].host = f"127.0.0.1:{free_port()}"

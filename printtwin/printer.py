@@ -8,6 +8,7 @@ status into the common shape below and says which job runs and how to download i
                         "axis_x", "axis_y", "axis_z", "speed", "flow", "fan_print", "fan_hotend"},
             "job": {"id", "progress" (0-100), "time_remaining", "time_printing"} or None}
   job    = {"id", "display_name", "name", "download", "size", "m_timestamp"}
+           (+ optional "plate" / "layers": which plate of a .gcode.3mf, the printer's layer count)
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from pathlib import Path
 from . import incoming, models
 from .metrics import parse_datagram
 from .prusalink import PrusaLink, split_host
-from .toolpath import JobDecoder, load_file
+from .toolpath import JobDecoder, JobFileError, load_file
 from .tracker import Tracker
 
 POLL_S = 2.0
@@ -180,6 +181,20 @@ class BasePrinter:
         """The printer refused the job file (it may hand it out later)."""
         return isinstance(e, urllib.error.HTTPError) and e.code == 404
 
+    def _job_file_rejected(self, job: dict, key: str, e: JobFileError):
+        """The job file can't be shown (wrong plate, too large): not tried again. An adapter that
+        can look for another file (Bambu) does that here."""
+
+    def _drop_job(self, message: str | None = None):
+        """Forget the current job and its model (a new print whose file isn't there yet)."""
+        with self.lock:
+            self._gen += 1                            # a load still running for the old job is superseded
+            self.job = self.tp = self.tracker = None
+            self.tp_key = self.tp_cache_key = self.tp_name = self._loading_key = None
+            self.tp_gz, self.tp_info, self._retry = b"", None, None
+            self.last_sdpos = None
+            self.loading = {"phase": "search", "message": message} if message else None
+
     # ----------------------------------------------------------------- poller
     def _poll_loop(self):
         while True:
@@ -267,13 +282,15 @@ class BasePrinter:
                     log(self.id, f"job file handed over by the slicer: {hit.name}")
             if path.exists():
                 with self.lock:
+                    if self._gen != gen:
+                        raise _Superseded()
                     self.loading = {"phase": "parse", "source": source}
                 self.publish_state()
-                self._install(load_file(path, job.get("plate")), key, gen, job)
+                self._install(load_file(path, job.get("plate"), job.get("layers")), key, gen, job)
                 log(self.id, f"toolpath from {source} in {time.time() - t0:.1f} s")
                 return
 
-            dec = JobDecoder(plate=job.get("plate"))
+            dec = JobDecoder(plate=job.get("plate"), layers=job.get("layers"))
             # a new job clears the old model at once; a retry of a refused download shows the
             # model only once data arrives (not a fresh empty one on every attempt)
             installed = not (self._retry and self._retry[0] == key)
@@ -283,6 +300,8 @@ class BasePrinter:
             tmp = path.with_name(path.name + ".part")
             total0 = job.get("size") or 0
             with self.lock:
+                if self._gen != gen:
+                    raise _Superseded()
                 self.loading = {"phase": "download", "done": 0, "total": total0, "progressive": True}
             self.publish_state()
 
@@ -298,6 +317,8 @@ class BasePrinter:
                         self._install(dec.tp, key, gen, job)
                         installed = True
                     with self.lock:
+                        if self._gen != gen:
+                            raise _Superseded()
                         self.loading = {"phase": "download", "done": n, "total": total or total0,
                                         "progressive": True}
                     self.publish_state(force=False)
@@ -311,6 +332,16 @@ class BasePrinter:
             log(self.id, f"downloaded + built in {time.time() - t0:.0f} s")
         except _Superseded:
             log(self.id, f"job {key} superseded while downloading")
+        except JobFileError as e:                    # trying the same file again won't help
+            log(self.id, f"job file {job.get('display_name') or key}: {e}")
+            with self.lock:
+                if self._gen == gen:
+                    self.loading = {"phase": "error", "message": str(e)}
+                    self._loading_key = None
+                    self.tp_cache_key = None
+                    self._retry = (key, 1, float("inf"))
+            self._job_file_rejected(job, key, e)
+            self.publish_state()
         except Exception as e:
             n = self._retry[1] + 1 if self._retry and self._retry[0] == key else 1
             wait = RETRY_S[min(n, len(RETRY_S)) - 1]
@@ -352,6 +383,8 @@ class BasePrinter:
             info["key"] = f"{key}.{gen}"
             info["name"] = job.get("display_name")
         with self.lock:
+            if self._gen != gen:                     # a newer job (or none) since the check above
+                raise _Superseded()
             same = self.tp is tp
             if not same:
                 tracker = Tracker(tp, **self.tracker_args)
@@ -367,7 +400,10 @@ class BasePrinter:
             if tp.complete:
                 self.loading = None
         if tp.complete:
-            log(self.id, f"toolpath {tp.count} segments, {len(tp.layer_z)} layers, {len(gz) / 1e6:.1f} MB gz")
+            guess = {"several": f" (plate {tp.meta.get('plate')} of several - a guess)",
+                     "renumbered": f" (the only plate, numbered {tp.meta.get('plate')} - not the one the printer named)"
+                     }.get(tp.meta.get("plate_guess"), "")
+            log(self.id, f"toolpath {tp.count} segments, {len(tp.layer_z)} layers, {len(gz) / 1e6:.1f} MB gz{guess}")
         self.publish_state()
 
     # --------------------------------------------------------- toolpath access

@@ -10,6 +10,9 @@ file from the printer over Wi-Fi.
 PrusaSlicer > Print Settings > Output options > Post-processing scripts, one line:
     "C:\\path\\to\\python.exe" "C:\\path\\to\\PrintTwin\\tools\\prusaslicer_hook.py"
 (full paths; quotes if they contain spaces; macOS/Linux: /usr/bin/python3 /path/to/...).
+Bambu Studio / OrcaSlicer: Process > Others > Post-processing scripts (advanced mode), same line.
+They hand over the plate G-code before packing it into the .gcode.3mf they send; for Bambu
+printers PrintTwin then finds the copy by its layer count, name and age instead of its size.
 Any Python 3.11+ works; prefer pythonw.exe on Windows if your Python has it (no console flash).
 
 Never blocks or breaks an export: any problem is logged to logs\\hook.log and

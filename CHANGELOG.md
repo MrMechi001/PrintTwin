@@ -10,6 +10,24 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
+## Unreleased
+
+* **Bambu Lab printers** (read-only): `kind = "bambu"` with the serial number and the LAN access
+  code. Status over MQTT, the job file (.gcode.3mf) over FTPS or from the slicer's hand-over – no
+  printer control, no cloud, no Developer Mode. Bambu printers report no nozzle position: the
+  position is estimated between the job's progress marks from the reported layer and percent, and
+  the viewer says so. Model and build volume from the serial number. The printer's certificate is
+  verified against a CA file or pinned on first contact (checked before the access code is sent,
+  on the FTPS data channel too). A reprint of the same job starts over; an earlier file under the
+  same name, a hand-over sliced after the start or a file with the wrong layer count is not shown;
+  the plate of a multi-plate job is picked by its layer count. A mistyped serial number is named
+  in the log.
+* .gcode.3mf archives are unpacked in pieces, with limits (no memory blow-up from a crafted file).
+* Bambu Studio / OrcaSlicer jobs: .gcode.3mf archives (plate G-code, project settings), Bambu's
+  G-code comments, M73 progress marks, M1020 filament changes.
+* The slicer hand-over (post-processing hook) also works with Bambu Studio and OrcaSlicer.
+* Simulated Bambu printer: `tools/sim_bambu.py`.
+
 ## 0.6.0 – Klipper printers (Voron & co.)
 
 * **Klipper printers (Voron & co.)** through Moonraker: `kind = "moonraker"`. PrintTwin reads

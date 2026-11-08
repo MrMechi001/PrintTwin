@@ -3,7 +3,9 @@
 usage: python -I tests/test_bambu.py        (needs the openssl tool for the simulator's certificates)
 Read-only status over MQTT, the job file over FTPS (P1 style: there from the start; X1 style: shows up
 late and still growing), the slicer hand-over when the printer prints from internal storage, the
-estimated progress (no position from the printer), certificate pinning and a wrong access code.
+estimated progress (no position from the printer), certificate pinning and a wrong access code;
+a second print of the same job (re-sliced), an earlier print's file under the same name, a job
+name with '/' and a mistyped serial number. The job logic in detail: tests/test_bambu_adapter.py.
 """
 import hashlib
 import json
@@ -33,7 +35,7 @@ def free_port():
         return s.getsockname()[1]
 
 
-def bambu_job(layers=30) -> bytes:
+def bambu_job(layers=30, x0=100) -> bytes:
     """A small job in Bambu Studio's G-code style (comments, M73 marks), written for this test."""
     out = ["; HEADER_BLOCK_START", "; generated for PrintTwin's tests", f"; total layer number: {layers}",
            "; HEADER_BLOCK_END", "", "; CONFIG_BLOCK_START", "; filament_colour = #00AE42", "; filament_type = PLA",
@@ -47,8 +49,8 @@ def bambu_job(layers=30) -> bytes:
                 "; FEATURE: Outer wall", "; LINE_WIDTH: 0.42"]
         for i in range(30):
             d = 5 + i
-            out += [f"G1 X{100 + d} Y100 E0.05", f"G1 X{100 + d} Y{100 + d} E0.05", f"G1 X100 Y{100 + d} E0.05",
-                    "G1 X100 Y100 E0.05"]
+            out += [f"G1 X{x0 + d} Y100 E0.05", f"G1 X{x0 + d} Y{100 + d} E0.05", f"G1 X{x0} Y{100 + d} E0.05",
+                    f"G1 X{x0} Y100 E0.05"]
             if (k * 30 + i) % max(1, layers * 30 // 100) == 0 and pct < 99:
                 pct += 1
                 out.append(f"M73 P{pct} R{max(0, 10 - pct // 10)}")
@@ -182,6 +184,59 @@ def wrong_code(job: Path):
     check("wrong access code: the log says why", "not authorized" in out, "see log" if "not authorized" not in out else "")
 
 
+def second_print(job: Path, job2: Path):
+    proc, base = run_sim(job, "--duration", "8", "--heat", "1", "--repeat", "--then", str(job2), "--gap", "3")
+    try:
+        st = wait(base, lambda s: s.get("toolpath_complete") and s.get("state") == "PRINTING", 30)
+        first = (st.get("job") or {}).get("id")
+        wait(base, lambda s: s.get("state") == "FINISHED", 30)
+        st = wait(base, lambda s: (s.get("job") or {}).get("id") not in (None, first) and s.get("toolpath_complete")
+                  and s.get("state") == "PRINTING" and (s.get("printed") or 0) > 0, 30)
+        info = get(f"{base}/api/p/sim/toolpath.json")
+        check("second print of the job (same name, file name, task id): a new print with the re-sliced file",
+              st and (st.get("job") or {}).get("id") != first and len(info["layers"]) == 20,
+              f"job {(st.get('job') or {}).get('id')} (first {first}), {len(info['layers'])} layers")
+        check("... starting over, not 'all printed'", 0 < (st.get("printed") or 0) < info["count"],
+              f"{st.get('printed')}/{info['count']}")
+    finally:
+        stop(proc)
+
+
+def stale_file(job: Path, old: Path):
+    proc, base = run_sim(job, "--serial", "00M00A000000001", "--style", "x1", "--stale", str(old), "--duration", "30",
+                         "--heat", "2", "--late", "4")
+    try:
+        st = wait(base, lambda s: s.get("toolpath_complete"), 40)
+        info = get(f"{base}/api/p/sim/toolpath.json") if st and st.get("toolpath_complete") else {}
+        check("X1C: an earlier print's file under the same name is not shown - this print's is",
+              len(info.get("layers", [])) == 30, f"{len(info.get('layers', []))} layers")
+    finally:
+        out = stop(proc)
+    check("... the old file was never downloaded", out.count("job file on the printer") == 1, out.count("job file on the printer"))
+
+
+def odd_name(job: Path):
+    proc, base = run_sim(job, "--name", "Hase / Osterhase", "--duration", "20")
+    try:
+        st = wait(base, lambda s: s.get("toolpath_complete"), 30)
+        check("job name with '/': the file the printer stored ('2f') is found", bool(st and st.get("toolpath_complete")))
+    finally:
+        stop(proc)
+
+
+def wrong_serial(job: Path, *mode):
+    proc, base = run_sim(job, "--config-serial", "01P00A0000000O1", "--duration", "20", *mode)
+    what = "pinned certificate: the printer refuses the topic" if mode else "CA: the certificate is for another serial"
+    try:
+        time.sleep(5)
+        st = get(f"{base}/api/p/sim/state")
+        check(f"mistyped serial number ({what}): offline", st.get("online") is False)
+    finally:
+        out = stop(proc)
+    check("... and the log says to check the serial number", "check the serial number" in out,
+          "" if "check the serial" in out else [ln for ln in out.splitlines() if "MQTT" in ln][:2])
+
+
 def unit_pin():
     from printtwin import tlsutil
 
@@ -210,7 +265,14 @@ else:
     with tempfile.TemporaryDirectory(prefix="pt_bambu_") as d:
         job = Path(d) / "Cube.gcode"
         job.write_bytes(bambu_job())
+        job2 = Path(d) / "Cube_v2.gcode"
+        job2.write_bytes(bambu_job(20, x0=120))
         p1_style(job)
+        second_print(job, job2)
+        stale_file(job, job2)
+        odd_name(job)
+        wrong_serial(job)
+        wrong_serial(job, "--pin")
         x1_style(job)
         internal_with_handover(job)
         pin_mode(job)
