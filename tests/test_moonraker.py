@@ -222,7 +222,7 @@ def run_main(tmp: Path):
         # a file name in different case: Klipper finds it, Moonraker needs the real spelling
         wait_state(base, lambda s: s.get("state") == "FINISHED", 60)
         body, hdr = multipart({"print": "false"}, "CaseJob.gcode", job_gcode(layers=6, tag="E"))
-        call(f"{base}/p/sim/server/files/upload", "POST", body, hdr)
+        call(f"{printer}/server/files/upload", "POST", body, hdr)    # straight to the printer: no copy here
         old_key = get(f"{base}/api/p/sim/state")[1].get("toolpath_key")
         code, _ = call(f"{base}/p/sim/printer/print/start", "POST", json.dumps({"filename": "casejob.gcode"}).encode(),
                        {"Content-Type": "application/json"})

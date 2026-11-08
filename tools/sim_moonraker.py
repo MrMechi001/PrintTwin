@@ -75,19 +75,23 @@ def main():
     job: dict = {}
     calls: list = []                             # (method, path) of every request, for the tests
 
+    def exact(rel: str):
+        """gcodes/<rel> only with exactly this spelling, like Moonraker on Linux (Windows would match
+        any case on its own) - None otherwise."""
+        f = gdir / rel
+        return f if f.is_file() and f.resolve().relative_to(gdir.resolve()).as_posix() == rel else None
+
     def start(rel: str) -> bool:
         """SDCARD_PRINT_FILE: start printing gcodes/<rel> (False while another print runs). Like
         Klipper, a name that only matches case-insensitively is found, and reported as asked."""
         with lock:
             if job.get("state") == "printing":
                 return False
-            path = gdir / rel
-            if not path.is_file():
-                hits = [f for f in gdir.rglob("*") if f.is_file()
-                        and f.relative_to(gdir).as_posix().lower() == rel.lower()]
-                if not hits:
-                    return False
-                path = hits[0]
+            # compare names exactly (Windows' file system would match any case on its own)
+            files = {f.relative_to(gdir).as_posix(): f for f in gdir.rglob("*") if f.is_file()}
+            path = files.get(rel) or next((f for n, f in files.items() if n.lower() == rel.lower()), None)
+            if path is None:
+                return False
             tp = load_file(path)
             n = max(1, tp.count)
             job.update(rel=rel, path=path, tp=tp, n=n, t0=time.time(), state="printing",
@@ -201,8 +205,8 @@ def main():
                                                        {"name": "config", "path": str(SIM), "permissions": "rw"}]})
                 if u.path == "/server/files/metadata":
                     rel = (q.get("filename") or [""])[0]
-                    f = gdir / rel
-                    if not f.is_file():
+                    f = exact(rel)
+                    if f is None:
                         return self._send(404, {"error": {"code": 404, "message": f"Metadata not available for {rel}"}})
                     tp = job["tp"] if job.get("rel") == rel else load_file(f)
                     return self._send(200, {"result": {
@@ -214,8 +218,8 @@ def main():
                 if u.path == "/api/version":
                     return self._send(200, {"server": "1.5.0", "api": "0.1", "text": "OctoPrint (Moonraker v0.11.0-sim)"})
             if u.path.startswith("/server/files/gcodes/"):
-                f = gdir / unquote(u.path[len("/server/files/gcodes/"):])
-                if not f.is_file():
+                f = exact(unquote(u.path[len("/server/files/gcodes/"):]))
+                if f is None:
                     return self._send(404, {"error": {"code": 404, "message": "File not found"}})
                 data = f.read_bytes()
                 self.send_response(200)
@@ -260,7 +264,7 @@ def main():
                     rel = json.loads(body or b"{}").get("filename") or parse_qs(u.query).get("filename", [""])[0]
                 except ValueError:
                     rel = parse_qs(u.query).get("filename", [""])[0]
-                if not (gdir / rel).is_file() or not start(rel):
+                if not start(rel):
                     return self._send(400, {"error": {"code": 400, "message": "SD busy"}})
                 return self._send(200, {"result": "ok"})
             self._send(404, {"error": {"code": 404, "message": "Not Found"}})
