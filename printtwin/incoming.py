@@ -81,6 +81,43 @@ def find(size: int | None, name: str | None, folder: Path = INCOMING) -> Path | 
     return best
 
 
+def _total_layers(path: Path) -> int | None:
+    import re
+    try:
+        with open(path, "rb") as f:
+            head = f.read(300_000)
+    except OSError:
+        return None
+    m = re.search(rb"; total layer number: (\d+)", head)
+    return int(m.group(1)) if m else None
+
+
+def find_bambu(total_layers: int | None, name: str | None, folder: Path = INCOMING,
+               max_age: float = 6 * 3600) -> Path | None:
+    """A Bambu job handed over by the slicer's post-processing hook. The printer reports no file size
+    (it stores a .gcode.3mf, the hook sees the plate G-code), so: a recent hand-over with the same
+    total layer count ("; total layer number: N"); one whose name contains the job name wins, then
+    the newest."""
+    if not total_layers or not folder.is_dir():
+        return None
+    want = _norm(name)
+    best, best_rank = None, None
+    now = time.time()
+    for side in folder.glob("*.json"):
+        try:
+            meta = json.loads(side.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        f = folder / str(meta.get("file", ""))
+        t = float(meta.get("time", 0))
+        if now - t > max_age or not f.is_file() or _total_layers(f) != total_layers:
+            continue
+        rank = (bool(want) and want in _norm(meta.get("name")), t)
+        if best_rank is None or rank > best_rank:
+            best, best_rank = f, rank
+    return best
+
+
 def copy_to(src: Path, dst: Path):
     tmp = dst.with_name(dst.name + ".part")
     shutil.copyfile(src, tmp)

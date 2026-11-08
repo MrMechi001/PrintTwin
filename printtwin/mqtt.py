@@ -50,7 +50,8 @@ class MqttClient:
 
     def __init__(self, host: str, port: int = 8883, username: str | None = None, password: str | None = None,
                  client_id: str = "printtwin", tls: bool = True, verify: bool = False, cafile: str | None = None,
-                 server_name: str | None = None, keepalive: int = 30, timeout: float = 10.0):
+                 server_name: str | None = None, keepalive: int = 30, timeout: float = 10.0,
+                 context: ssl.SSLContext | None = None):
         """server_name: the name the certificate must carry when verifying (Bambu: the printer's
         serial number is its certificate's CN), default the host."""
         self.host, self.port = host, port
@@ -58,6 +59,7 @@ class MqttClient:
         self.client_id = client_id
         self.tls, self.verify, self.cafile = tls, verify, cafile
         self.server_name = server_name
+        self.context = context                           # a ready TLS context (tlsutil.context) overrides the above
         self.keepalive, self.timeout = keepalive, timeout
         self.sock: socket.socket | None = None
         self._wlock = threading.Lock()
@@ -68,7 +70,9 @@ class MqttClient:
     # ------------------------------------------------------------------ connection
     def connect(self):
         raw = socket.create_connection((self.host, self.port), timeout=self.timeout)
-        if self.tls:
+        if self.tls and self.context is not None:
+            raw = self.context.wrap_socket(raw, server_hostname=self.server_name or self.host)
+        elif self.tls:
             if self.verify or self.cafile:
                 ctx = ssl.create_default_context(cafile=self.cafile)
                 # Bambu's CA lacks extensions Python 3.13+ demands under VERIFY_X509_STRICT

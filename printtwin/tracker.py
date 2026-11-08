@@ -118,5 +118,40 @@ class Tracker:
                 self.printed = p
         return self.printed
 
+    def estimate(self, layer: int | None, percent: float | None, frac: float) -> float:
+        """No position from the printer (Bambu Lab): it reports the layer number and the percent of
+        the slicer's "M73 L" / "M73 P" lines. The print is between the last mark it passed and the
+        next one; `frac` (0..1, from the time per percent) says how far. Only ever moves forward."""
+        tp = self.tp
+        n = tp.count
+        if not n:
+            return self.printed
+        lo, hi = 0, n
+        if layer:
+            marks = tp.layer_marks or [(s, i + 1) for i, s in enumerate(tp.layer_start)]
+            at = [s for s, v in marks if v == layer]
+            after = [s for s, v in marks if v > layer]
+            if at:
+                lo = max(lo, at[0])
+            if after:
+                hi = min(hi, after[0])
+        if percent is not None and tp.progress_marks:
+            before = [s for s, v in tp.progress_marks if v <= percent]
+            after = [s for s, v in tp.progress_marks if v > percent]
+            if before:
+                lo = max(lo, before[-1])
+            if after:
+                hi = min(hi, after[0])
+        hi = max(hi, lo)
+        p = lo + max(0.0, min(0.999, frac)) * (hi - lo)
+        if p > self.printed:
+            self.printed = p
+            k = min(int(p), n - 1)
+            u = p - k
+            st, en, b = tp.start, tp.end, 3 * k
+            self.nozzle = (st[b] + (en[b] - st[b]) * u, st[b + 1] + (en[b + 1] - st[b + 1]) * u,
+                           st[b + 2] + (en[b + 2] - st[b + 2]) * u)
+        return self.printed
+
     def finish(self):
         self.printed = float(self.tp.count)

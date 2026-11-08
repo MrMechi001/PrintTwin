@@ -578,11 +578,11 @@ def _scan_meta(meta: dict, text: bytes):
             meta[key] = m.group(1).decode("utf-8", "replace").strip()
 
 
-def decode_bytes(buf: bytes) -> Toolpath:
-    d = JobDecoder()
+def decode_bytes(buf: bytes, plate: int | None = None) -> Toolpath:
+    d = JobDecoder(plate=plate)
     d.feed(buf)
     return d.finish()
 
 
-def load_file(path: Path) -> Toolpath:
-    return decode_bytes(Path(path).read_bytes())
+def load_file(path: Path, plate: int | None = None) -> Toolpath:
+    return decode_bytes(Path(path).read_bytes(), plate)

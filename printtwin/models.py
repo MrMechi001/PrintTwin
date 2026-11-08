@@ -111,6 +111,35 @@ def from_prusalink(type_code: str | None) -> str | None:
     return PRUSALINK_TYPES.get(f"{m.group(1)}.{m.group(2)}.0") if m else None
 
 
+# Bambu Lab: model id (slice_info printer_model_id, SSDP DevModel) and the first three characters of
+# the serial number (BambuStudio's sn_prefix) -> name, generic model, build volume (mm). All CoreXY
+# with the bed moving in Z, except the A-series bed-slingers ("i3" in BambuStudio's printer_structure).
+BAMBU_MODELS = {
+    "BL-P001": ("X1 Carbon", "corexy", (256, 256, 256)), "BL-P002": ("X1", "corexy", (256, 256, 256)),
+    "C13": ("X1E", "corexy", (256, 256, 256)), "C11": ("P1P", "corexy", (256, 256, 256)),
+    "C12": ("P1S", "corexy", (256, 256, 256)), "N7": ("P2S", "corexy", (256, 256, 256)),
+    "N6": ("X2D", "corexy", (256, 256, 260)), "O1D": ("H2D", "corexy", (350, 320, 325)),
+    "O1E": ("H2D Pro", "corexy", (350, 320, 325)), "O2D": ("H2D Pro", "corexy", (350, 320, 325)),
+    "O1S": ("H2S", "corexy", (340, 320, 340)), "O1C": ("H2C", "corexy", (330, 320, 325)),
+    "O1C2": ("H2C", "corexy", (330, 320, 325)), "N10": ("H3C", "corexy", (330, 320, 325)),
+    "N2S": ("A1", "bedslinger", (256, 256, 256)), "N1": ("A1 mini", "bedslinger", (180, 180, 180)),
+    "N9": ("A2L", "bedslinger", (330, 320, 325)),
+}
+BAMBU_SN_PREFIX = {"00M": "BL-P001", "00W": "BL-P002", "03W": "C13", "01S": "C11", "01P": "C12", "22E": "N7",
+                   "20P": "N6", "094": "O1D", "239": "O1E", "093": "O1S", "31B": "O1C2", "32X": "N10",
+                   "039": "N2S", "030": "N1", "26A": "N9"}
+
+
+def bambu_model_id(serial: str | None) -> str | None:
+    return BAMBU_SN_PREFIX.get(str(serial or "").strip().upper()[:3])
+
+
+def from_bambu(printer_type: str | None) -> str | None:
+    t = str(printer_type or "")
+    m = BAMBU_MODELS.get(t[len("bambu/"):]) if t.startswith("bambu/") else None
+    return m[1] if m else None
+
+
 def from_klipper(printer_type: str | None) -> str | None:
     t = str(printer_type or "")
     return _KLIPPER.get(t[len("klipper/"):]) if t.startswith("klipper/") else None
@@ -128,6 +157,12 @@ def resolve(configured: str | None, job_printer_model: str | None, prusalink_typ
             return k, "job"
         k = from_klipper(prusalink_type)
         return (k, "printer") if k else (None, "unknown")
+    if str(prusalink_type or "").startswith("bambu/"):      # the hardware (serial number), like PrusaLink
+        k = from_bambu(prusalink_type)
+        if k:
+            return k, "printer"
+        k = from_slicer(job_printer_model)
+        return (k, "job") if k else ("corexy", "printer")
     k = from_prusalink(prusalink_type)
     if k:
         return k, "printer"

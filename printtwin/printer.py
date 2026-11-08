@@ -55,6 +55,7 @@ class BasePrinter:
         self.model_cfg = str(cfg.get("model", "auto"))   # printer model to show, "auto" = detect
         self.printer_type: str | None = None             # PrusaLink /api/version "printer", e.g. "1.4.0"
         self.volume: dict | None = None                  # build volume the printer reports (Klipper)
+        self.estimated = False                           # progress estimated, not measured (Bambu)
         self.lock = threading.RLock()
         self.subs: set[queue.Queue] = set()
 
@@ -125,6 +126,7 @@ class BasePrinter:
                           "bed": pr.get("temp_bed"), "bed_target": pr.get("target_bed")},
                 "axis_x": pr.get("axis_x"), "axis_y": pr.get("axis_y"), "axis_z": pr.get("axis_z"),
                 "speed": pr.get("speed"), "flow": pr.get("flow"),
+                "layer": pr.get("layer"), "total_layers": pr.get("total_layers"),   # what the printer reports (Bambu)
                 "fan_print": pr.get("fan_print"), "fan_hotend": pr.get("fan_hotend"),
                 "progress": jb.get("progress"), "time_remaining": jb.get("time_remaining"),
                 "time_printing": jb.get("time_printing"),
@@ -141,6 +143,7 @@ class BasePrinter:
                     "sdpos_age": round(now - self.last_sdpos_wall, 1) if self.last_sdpos_wall else None,
                     "pos_rate": round(self.pos_rate, 1),
                     "sync": tr.sync() if tr else None,
+                    "estimated": self.estimated,          # no position from the printer (Bambu)
                 },
                 "format": (self.tp_info or {}).get("format"),
                 "printed": None if not tr else round(tr.printed, 3),
@@ -266,11 +269,11 @@ class BasePrinter:
                 with self.lock:
                     self.loading = {"phase": "parse", "source": source}
                 self.publish_state()
-                self._install(load_file(path), key, gen, job)
+                self._install(load_file(path, job.get("plate")), key, gen, job)
                 log(self.id, f"toolpath from {source} in {time.time() - t0:.1f} s")
                 return
 
-            dec = JobDecoder()
+            dec = JobDecoder(plate=job.get("plate"))
             # a new job clears the old model at once; a retry of a refused download shows the
             # model only once data arrives (not a fresh empty one on every attempt)
             installed = not (self._retry and self._retry[0] == key)

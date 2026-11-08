@@ -637,10 +637,13 @@ function onState(s) {
 
   const m = s.metrics || {};
   const dot = $('live');
-  const fmt = s.format ? ` · ${s.format === 'bgcode' ? '.bgcode' : '.gcode'}` : '';
+  const fmt = s.format ? ` · ${{ bgcode: '.bgcode', '3mf': '.gcode.3mf' }[s.format] || '.gcode'}` : '';
   if (m.sync && m.sync.n >= 20 && m.sync.ok < 0.95) {
     dot.className = 'dot partial';
     $('livetxt').textContent = `Live, but file position off (${Math.round(m.sync.ok * 100)} % in sync)${fmt}`;
+  } else if (m.estimated && active) {
+    dot.className = 'dot partial';               // Bambu: the printer reports layer and percent, no position
+    $('livetxt').textContent = `Estimated position (printer reports layer and %)${fmt}`;
   } else if (m.pos_age != null && m.pos_age < 3) {
     dot.className = 'dot on';
     $('livetxt').textContent = `Live nozzle position · ${Math.round(m.pos_rate)} Hz${fmt}`;

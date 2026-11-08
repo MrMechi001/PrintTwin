@@ -11,11 +11,12 @@ from pathlib import Path
 
 from . import __version__, config, incoming
 from .config import ROOT
+from .bambu import BambuPrinter
 from .moonraker import MoonrakerPrinter
 from .printer import PrusaLinkPrinter, log
 from .server import serve
 
-KINDS = {"prusalink": PrusaLinkPrinter, "moonraker": MoonrakerPrinter}
+KINDS = {"prusalink": PrusaLinkPrinter, "moonraker": MoonrakerPrinter, "bambu": BambuPrinter}
 PLACEHOLDERS = {"192.168.x.y", "PRUSALINK-API-KEY", ""}
 
 
@@ -63,9 +64,16 @@ def main(argv=None):
     if args.config is None and first_run(config.DEFAULT_CONFIG):
         sys.exit(1)
     cfg = config.load(args.config)
-    pending = [pc.get("id", "?") for pc in cfg.get("printer", [])
-               if str(pc.get("host", "")).strip() in PLACEHOLDERS
-               or (pc.get("kind", "prusalink") == "prusalink" and str(pc.get("api_key", "")).strip() in PLACEHOLDERS)]
+    def _incomplete(pc: dict) -> bool:
+        kind = pc.get("kind", "prusalink")
+        if str(pc.get("host", "")).strip() in PLACEHOLDERS:
+            return True
+        if kind == "prusalink":
+            return str(pc.get("api_key", "")).strip() in PLACEHOLDERS
+        if kind == "bambu":                     # the serial number and the LAN access code (printer screen)
+            return any(str(pc.get(k, "")).strip() in PLACEHOLDERS for k in ("serial", "access_code"))
+        return False
+    pending = [pc.get("id", "?") for pc in cfg.get("printer", []) if _incomplete(pc)]
     if pending or not cfg.get("printer"):
         print(f"Please enter your printer's IP address and PrusaLink API key in "
               f"{args.config or config.DEFAULT_CONFIG} (printer {', '.join(pending) or '- none configured -'}).")
