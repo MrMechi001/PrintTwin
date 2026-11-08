@@ -58,7 +58,8 @@ for s, want in [("V2_350", "corexy_gantry"), ("V2_250", "corexy_gantry"), ("Voro
     check(f"slicer {s!r}", models.from_slicer(s), want)
 for s, want in [("Bambu Lab X1 Carbon", "corexy"), ("Bambu Lab X1E", "corexy"), ("Bambu Lab P1S", "corexy"),
                 ("Bambu Lab P1P", "corexy"), ("Bambu Lab H2D", "corexy"), ("Bambu Lab A1", "bedslinger"),
-                ("Bambu Lab A1 mini", "bedslinger")]:
+                ("Bambu Lab A1 mini", "bedslinger"), ("Bambu Lab A2L", "bedslinger"), ("Bambu Lab X2D", "corexy"),
+                ("Bambu Lab H2C", "corexy"), ("Bambu Lab P2S", "corexy")]:
     check(f"slicer {s!r}", models.from_slicer(s), want)
 for t, want in [("klipper/corexy", "corexy"), ("klipper/corexy+qgl", "corexy_gantry"), ("klipper/cartesian", "bedslinger"),
                 ("klipper/corexz", "bedslinger"), ("klipper/delta", None), ("1.4.0", None)]:

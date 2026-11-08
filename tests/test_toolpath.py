@@ -204,11 +204,14 @@ def bambu_gcode(layers, colour="#FF0000;#00AE42"):
            "; CONFIG_BLOCK_END", "", "M620 S255", "T255", "M621 S255", "T1000", "G90", "M83"]
     for k in range(layers):
         z = 0.2 * (k + 1)
-        out += ["; CHANGE_LAYER", f"; Z_HEIGHT: {z:.1f}", "; LAYER_HEIGHT: 0.2", f"G1 Z{z:.1f}",
+        out += ["; CHANGE_LAYER", f"; Z_HEIGHT: {z:.1f}", "; LAYER_HEIGHT: 0.2", f"M73 L{k + 1}",
+                f"M73 P{20 * k} R{10 - k}", f"G1 Z{z:.1f}",
                 "; FEATURE: Outer wall", "; LINE_WIDTH: 0.42", "G1 X100 Y100", "G1 X110 Y100 E0.5",
                 "; FEATURE: Sparse infill", "; LINE_WIDTH: 0.45", "G1 X110 Y110 E0.5"]
         if k == 2:
             out += ["M620 S1A", "T1", "M621 S1A", "; FEATURE: Support interface", "G1 X100 Y110 E0.4"]
+        if k == 3:
+            out += ["M1020 S0 H0", "T5", "G1 X105 Y110 E0.2"]      # M1020 = filament change; T5 > filaments
     return ("\n".join(out) + "\n").encode()
 
 
@@ -219,7 +222,12 @@ check("Bambu G-code: feature types from '; FEATURE:'", [TYPES[t] for t in bt.typ
 check("Bambu G-code: 'Support interface' known", TYPES[bt.type[6]] == "Support material interface", TYPES[bt.type[6]])
 check("Bambu G-code: widths / heights from '; LINE_WIDTH:' / '; LAYER_HEIGHT:'",
       abs(bt.wh[0] - 0.42) < 1e-6 and abs(bt.wh[2] - 0.45) < 1e-6 and abs(bt.wh[1] - 0.2) < 1e-6, str(list(bt.wh[:4])))
-check("Bambu G-code: T255 / T1000 are no tools, T1 is", bt.tool_changes == [(6, 1)], str(bt.tool_changes))
+check("Bambu G-code: T255 / T1000 / T5 (only 2 filaments) are no tools; T1 and M1020 S0 are",
+      bt.tool_changes == [(6, 1), (9, 0)], str(bt.tool_changes))
+check("Bambu G-code: M73 L layer marks and M73 P progress marks",
+      bt.layer_marks == [(0, 1), (2, 2), (4, 3), (7, 4), (10, 5)] and [v for _, v in bt.progress_marks] == [0, 20, 40, 60, 80],
+      f"{bt.layer_marks} {bt.progress_marks}")
+check("Bambu G-code: '; total layer number' kept", bt.meta.get("total_layers") == 5, str(bt.meta.get("total_layers")))
 inf = bt.info()
 check("Bambu G-code: settings at the start (colours, printer, bed from printable_area)",
       inf["filament_colours"] == ["#FF0000", "#00AE42"] and bt.meta.get("printer_model") == "Bambu Lab X1 Carbon"
@@ -231,19 +239,28 @@ with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr("Metadata/plate_1.gcode", bambu_gcode(3, "#112233"))
     z.writestr("Metadata/plate_2.gcode", bambu_gcode(6, "#445566"))
     z.writestr("Metadata/project_settings.config", json.dumps({
-        "printer_model": "Bambu Lab P1S", "filament_colour": ["#ABCDEF"], "printable_area": ["0x0", "256x0", "256x256", "0x256"]}))
+        "printer_model": "Bambu Lab P1S", "filament_colour": ["#ABCDEF"], "printer_structure": "corexy",
+        "printable_area": ["0x0", "256x0", "256x256", "0x256"]}))
+    z.writestr("Metadata/slice_info.config", '<config><plate><metadata key="printer_model_id" value="BL-P001"/></plate></config>')
 three = zbuf.getvalue()
 t1 = decode_bytes(three)
 check(".gcode.3mf: plate 1 by default", t1.meta.get("plate") == 1 and len(t1.layer_z) == 3 and t1.meta["format"] == "3mf",
       f"plate {t1.meta.get('plate')}, {len(t1.layer_z)} layers")
-check(".gcode.3mf: the project's settings count (printer, colours)", t1.meta.get("printer_model") == "Bambu Lab P1S"
-      and t1.info()["filament_colour"] == "#ABCDEF", f"{t1.meta.get('printer_model')} {t1.info()['filament_colour']}")
+check(".gcode.3mf: the G-code's own settings win over the (possibly stale) project's",
+      t1.meta.get("printer_model") == "Bambu Lab X1 Carbon" and t1.info()["filament_colour"] == "#112233",
+      f"{t1.meta.get('printer_model')} {t1.info()['filament_colour']}")
+check(".gcode.3mf: the project fills gaps; printer_model_id from slice_info",
+      t1.meta.get("printer_structure") == "corexy" and t1.meta.get("printer_model_id") == "BL-P001",
+      f"{t1.meta.get('printer_structure')} {t1.meta.get('printer_model_id')}")
 d2 = JobDecoder(plate=2)
 for k in range(0, len(three), 1000):            # arrives in pieces, like a download
     d2.feed(three[k:k + 1000])
 t2 = d2.finish()
 check(".gcode.3mf: plate 2 when asked, fed in pieces", t2.meta.get("plate") == 2 and len(t2.layer_z) == 6,
       f"plate {t2.meta.get('plate')}, {len(t2.layer_z)} layers")
+
+ab = decode_bytes(bambu_gcode(2, "#FF000080;#00AE42FF"))
+check("colours with alpha (#RRGGBBAA)", ab.info()["filament_colours"] == ["#FF0000", "#00AE42"], str(ab.info()["filament_colours"]))
 
 print("\nall passed" if not failures else f"\n{failures} FAILED")
 sys.exit(1 if failures else 0)

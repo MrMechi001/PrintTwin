@@ -50,11 +50,14 @@ class MqttClient:
 
     def __init__(self, host: str, port: int = 8883, username: str | None = None, password: str | None = None,
                  client_id: str = "printtwin", tls: bool = True, verify: bool = False, cafile: str | None = None,
-                 keepalive: int = 30, timeout: float = 10.0):
+                 server_name: str | None = None, keepalive: int = 30, timeout: float = 10.0):
+        """server_name: the name the certificate must carry when verifying (Bambu: the printer's
+        serial number is its certificate's CN), default the host."""
         self.host, self.port = host, port
         self.username, self.password = username, password
         self.client_id = client_id
         self.tls, self.verify, self.cafile = tls, verify, cafile
+        self.server_name = server_name
         self.keepalive, self.timeout = keepalive, timeout
         self.sock: socket.socket | None = None
         self._wlock = threading.Lock()
@@ -66,11 +69,16 @@ class MqttClient:
     def connect(self):
         raw = socket.create_connection((self.host, self.port), timeout=self.timeout)
         if self.tls:
-            ctx = ssl.create_default_context(cafile=self.cafile) if (self.verify or self.cafile) \
-                else ssl._create_unverified_context()      # the printer's own self-signed certificate
+            if self.verify or self.cafile:
+                ctx = ssl.create_default_context(cafile=self.cafile)
+                # Bambu's CA lacks extensions Python 3.13+ demands under VERIFY_X509_STRICT
+                ctx.verify_flags &= ~getattr(ssl, "VERIFY_X509_STRICT", 0)
+            else:
+                ctx = ssl._create_unverified_context()   # the printer's own self-signed certificate
             if not self.verify:
                 ctx.check_hostname = False
-            raw = ctx.wrap_socket(raw, server_hostname=self.host)
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_2   # some printers (P2S) hang on a TLS 1.3 handshake
+            raw = ctx.wrap_socket(raw, server_hostname=self.server_name or self.host)
         self.sock = raw
         self._buf = b""
         flags = 0x02                                       # clean session

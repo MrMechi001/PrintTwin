@@ -45,6 +45,7 @@ _ALIASES = {
     "skirt": "Skirt/Brim", "brim": "Skirt/Brim", "support": "Support material",
     "support transition": "Support material", "prime tower": "Wipe tower",
     "support interface": "Support material interface", "floating vertical shell": "Perimeter",
+    "support ironing": "Ironing", "multiple": "Other", "undefined": "Other",
     # SuperSlicer
     "internal perimeter": "Perimeter", "thin wall": "Gap fill", "internal bridge infill": "Bridge infill",
     # Cura
@@ -57,7 +58,8 @@ TYPE_LOOKUP.update({k: TYPE_ID[v] for k, v in _ALIASES.items()})
 
 ARC_STEP_MM = 0.4          # chord length used to flatten G2/G3 arcs
 MIN_LAYER_STEP = 0.05      # Z rise that starts a new layer when a file has no markers
-META_KEYS = ("filament_colour", "bed_shape", "printer_model", "filament_type", "layer_height", "nozzle_diameter")
+META_KEYS = ("filament_colour", "bed_shape", "printer_model", "filament_type", "layer_height", "nozzle_diameter",
+             "printer_structure", "printable_height")
 META_ALIASES = {"printable_area": "bed_shape"}   # Bambu Studio / OrcaSlicer name for the bed outline
 ASCII_TAIL = 300_000       # PrusaSlicer keeps its settings block at the end of plain .gcode, Bambu at the start
 MAX_TOOL = 63              # T255 / T1000 in Bambu start G-code are no real tools
@@ -77,6 +79,10 @@ class Toolpath:
     layer_z: list = field(default_factory=list)
     layer_start: list = field(default_factory=list)
     tool_changes: list = field(default_factory=list)   # [segment index, tool] at every T<n> (XL tools, MMU filaments)
+    # progress anchors in the file (Bambu printers report only these, no position): the segment
+    # index at each "M73 L<layer>" and "M73 P<percent>" line
+    layer_marks: list = field(default_factory=list)     # [segment index, layer number]
+    progress_marks: list = field(default_factory=list)  # [segment index, percent]
     meta: dict = field(default_factory=dict)
     text_size: int = 0
     complete: bool = False      # False while the job file is still arriving
@@ -144,6 +150,8 @@ class Toolpath:
             "types": TYPES,
             "types_present": sorted(self._types),
             "tool_changes": [[s, t] for s, t in self.tool_changes if s <= n],
+            "layer_marks": [[s, v] for s, v in self.layer_marks if s <= n],
+            "progress_marks": [[s, v] for s, v in self.progress_marks if s <= n],
             **self.meta,
         }
         if "filament_colour" in self.meta and "filament_colours" not in self.meta:
@@ -154,7 +162,7 @@ class Toolpath:
 def _filaments(meta: dict) -> dict:
     """filament_colour / filament_type are ';'-separated, one entry per tool (or MMU filament)."""
     cols = [c.strip().strip('"') for c in str(meta.get("filament_colour", "")).split(";")]
-    cols = [c if re.fullmatch(r"#[0-9A-Fa-f]{6}", c) else "#FF8000" for c in cols] or ["#FF8000"]
+    cols = [c[:7] if re.fullmatch(r"#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?", c) else "#FF8000" for c in cols] or ["#FF8000"]
     out = {"filament_colours": cols, "filament_colour": cols[0]}
     if meta.get("filament_type"):
         out["filament_types"] = [t.strip().strip('"') for t in str(meta["filament_type"]).split(";")]
@@ -330,6 +338,21 @@ class GcodeParser:
                     abs_e = True
                 elif raw.startswith(b"M83"):
                     abs_e = False
+                elif raw.startswith(b"M73 "):            # Bambu: "M73 L<layer>", "M73 P<percent> R<minutes>"
+                    for k, v in _WORD.findall(raw.split(b";", 1)[0], 4):
+                        if k == b"L":
+                            tp.layer_marks.append((len(ty), int(float(v))))
+                        elif k == b"P":
+                            pc = int(float(v))
+                            if not tp.progress_marks or tp.progress_marks[-1][1] != pc:
+                                tp.progress_marks.append((len(ty), pc))
+                elif raw.startswith(b"M1020 ") and b"S" in raw:   # H2D / H2C: filament change "M1020 S<n>"
+                    m1020 = re.search(rb"S(\d+)", raw.split(b";", 1)[0])
+                    if m1020:
+                        tool = int(m1020.group(1))
+                        if tool <= MAX_TOOL and tool != s.get("tool", -1):
+                            s["tool"] = tool
+                            tp.tool_changes.append((len(ty), tool))
             elif c == 84 and len(raw) > 1 and 48 <= raw[1] <= 57:   # 'T<n>': tool / filament change
                 j = 1
                 while j < len(raw) and 48 <= raw[j] <= 57:
@@ -374,7 +397,7 @@ def _heights_from_layers(tp: Toolpath):
 
 def _nozzle_width(meta: dict) -> float:
     try:
-        nozzle = float(str(meta.get("nozzle_diameter", "0.4")).split(",")[0])
+        nozzle = float(re.split(r"[,;]", str(meta.get("nozzle_diameter", "0.4")))[0])
     except ValueError:
         nozzle = 0.4
     return round(nozzle * 1.125, 3)
@@ -448,23 +471,31 @@ class JobDecoder:
             if self._parser is None:               # no G-code blocks at all
                 self._parser = GcodeParser(_nozzle_width(meta), tp=tp)
         elif self.fmt == "3mf":
-            gcode = self._unzip(bytes(self._buf))
+            gcode, project = self._unzip(bytes(self._buf))
             self._buf = bytearray()
+            # what was actually sliced (the G-code's own settings block) first; the project's
+            # settings, which can be stale, only fill gaps
+            _scan_meta(meta, gcode[:ASCII_TAIL] + b"\n" + gcode[-ASCII_TAIL:])
+            for k, v in project.items():
+                meta.setdefault(k, v)
             self._parser = GcodeParser(_nozzle_width(meta), tp=tp)
             self._parser.feed(gcode)
-            _scan_meta(meta, gcode[:ASCII_TAIL] + b"\n" + gcode[-ASCII_TAIL:])
         else:
             _scan_meta(meta, self._headtext + b"\n" + bytes(self._buf[-ASCII_TAIL:]))
             self._buf = bytearray()
         self._parser.finish()
         if "filament_colour" in meta:
             meta.update(_filaments(meta))
+            # a tool number beyond the job's filaments is a firmware code, not a filament (Bambu)
+            nfil = len(meta["filament_colours"])
+            if any(t >= nfil for _, t in tp.tool_changes) and meta.get("printer_model", "").lower().startswith("bambu"):
+                tp.tool_changes[:] = [(sg, t) for sg, t in tp.tool_changes if t < nfil]
         return tp
 
     # ------------------------------------------------------------------ Bambu .gcode.3mf
-    def _unzip(self, data: bytes) -> bytes:
-        """The plate's G-code; colours, filament types and the printer from the project's settings."""
-        meta = self.tp.meta
+    def _unzip(self, data: bytes) -> tuple[bytes, dict]:
+        """The plate's G-code, and the project's settings (printer, colours, bed) to fill gaps."""
+        meta, project = self.tp.meta, {}
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             names = z.namelist()
             plates = sorted((n for n in names if re.fullmatch(r"Metadata/plate_\d+\.gcode", n)),
@@ -479,13 +510,18 @@ class JobDecoder:
                     ps = json.loads(z.read("Metadata/project_settings.config"))
                 except ValueError:
                     ps = {}
-                for k in ("printer_model", "filament_colour", "filament_type", "nozzle_diameter", "printable_area"):
+                for k in ("printer_model", "filament_colour", "filament_type", "nozzle_diameter", "printable_area",
+                          "printer_structure", "printable_height"):
                     v = ps.get(k)
                     if v:
-                        meta.setdefault(META_ALIASES.get(k, k), ";".join(map(str, v)) if isinstance(v, list) else str(v))
+                        project[META_ALIASES.get(k, k)] = ";".join(map(str, v)) if isinstance(v, list) else str(v)
                 if isinstance(ps.get("printable_area"), list):
-                    meta["bed_shape"] = ",".join(ps["printable_area"])
-            return z.read(name)
+                    project["bed_shape"] = ",".join(ps["printable_area"])
+            m = re.search(rb'<metadata key="printer_model_id" value="([^"]*)"',
+                          z.read("Metadata/slice_info.config")) if "Metadata/slice_info.config" in names else None
+            if m and m.group(1):
+                meta["printer_model_id"] = m.group(1).decode("utf-8", "replace")
+            return z.read(name), project
 
     # ------------------------------------------------------------------ bgcode blocks
     def _blocks(self):
@@ -528,6 +564,9 @@ class JobDecoder:
 
 def _scan_meta(meta: dict, text: bytes):
     """'; key = value' settings lines (PrusaSlicer at the end, Bambu Studio at the start)."""
+    m = re.search(rb"^; total layer number: (\d+)", text, re.M)
+    if m and "total_layers" not in meta:
+        meta["total_layers"] = int(m.group(1))
     for k in META_KEYS + tuple(META_ALIASES):
         if k == "layer_height":
             continue

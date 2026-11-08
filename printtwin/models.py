@@ -79,7 +79,7 @@ _SLICER = [
     (r"^ANYCUBICKOBRAS", "corexy"),                       # Kobra S1
     (r"^ANYCUBICKOBRA", "bedslinger"),                    # Kobra 2 / 3
     # Bambu Lab (Bambu Studio / OrcaSlicer: "Bambu Lab X1 Carbon", "Bambu Lab A1 mini", ...)
-    (r"^BAMBULABA1", "bedslinger"),                       # A1, A1 mini: bed moves in Y
+    (r"^BAMBULABA\d", "bedslinger"),                      # A1, A1 mini, A2L: bed moves in Y
     (r"^BAMBULAB", "corexy"),                             # X1 / X1 Carbon / X1E, P1P / P1S, H2D ...: bed in Z
 ]
 
