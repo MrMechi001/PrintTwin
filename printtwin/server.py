@@ -106,7 +106,7 @@ def make_handler(printers: dict, port: int, slicer: bool = False, log=print):
                     self._json({"error": f"no printer {unquote(m.group(1))!r} in the config"}, 404)
                 elif rest in ("", "/", "/index.html") and self.command in ("GET", "HEAD"):
                     self._send(302, b"", "text/plain", {"Location": f"/?p={quote(p.id)}"})
-                elif slicerhost.is_printer_api(rest):
+                elif slicerhost.is_printer_api(rest) or rest.startswith("/api/"):   # (403 unless allowed)
                     if (self.headers.get("Authorization") or "").lower().startswith("digest"):
                         # the digest hash covers the URL the slicer asked for (/p/<id>/api/...), the
                         # printer checks it against its own (/api/...): it can never match here
@@ -132,6 +132,10 @@ def make_handler(printers: dict, port: int, slicer: bool = False, log=print):
             if not slicer:
                 return self._json({"error": "PrintTwin is not set up as print host - add  [slicer]  "
                                             "print_host = true  to config.local.toml and restart PrintTwin"}, 403)
+            if not slicerhost.allowed(p.kind, self.command, urlsplit(path_qs).path):
+                return self._json({"error": f"PrintTwin passes on only the slicer's calls (connection test, "
+                                            f"upload, print) to {p.kind} printers, not {self.command} "
+                                            f"{urlsplit(path_qs).path}"}, 403)
             slicerhost.forward(self, p, path_qs, log)
 
         def _api(self, parts: list[str], query: dict):

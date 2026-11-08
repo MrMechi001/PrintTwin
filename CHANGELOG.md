@@ -5,9 +5,31 @@
 * More printers: Klipper (Moonraker), OctoPrint and Bambu Lab adapters; true-to-size
   CORE One and CORE One L, the XL refined with real measurements. Other PrusaLink printers
   (MK3.9, CORE One, XL, MINI) should already work – test reports welcome.
-* PrintTwin as print host for Klipper / Moonraker printers too (Voron & co.).
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
+
+## Unreleased
+
+* **Klipper printers (Voron & co.)** through Moonraker: `kind = "moonraker"`. PrintTwin reads
+  Klipper's status about 4 times a second – file position and live toolhead position (G-code
+  offsets removed) for the live view, temperatures, progress from the file position, remaining
+  time from the slicer's estimate – and loads the job file from Moonraker. Between Klipper's
+  position updates the nozzle follows the toolpath instead of cutting across the part.
+* Klipper in the slicer: PrintTwin as print host for PrusaSlicer "Klipper (via Moonraker)",
+  OrcaSlicer "Moonraker (Klipper)" and the OctoPrint host types. Because Moonraker trusts LAN
+  addresses, only the slicer's calls are passed on (connection test, upload, start the
+  uploaded file) – no G-code, emergency stop, file deletion or reboot – and without an API key
+  only from LAN addresses. A file Moonraker changes after the upload (object processing) is
+  loaded from the printer instead of PrintTwin's copy.
+* Printer model for Klipper printers from the slicer's printer name (Voron 2.4 / Trident / V0 /
+  Switchwire, Sovol SV08, RatRig, Creality K1, Qidi, Elegoo, Anycubic) or Klipper's kinematics;
+  new generic **flying-gantry CoreXY** model (bed fixed, the gantry moves in Z: Voron 2.4, SV08).
+  Generic models take their size from the printer's travel limits.
+* Simulated Klipper printer: `tools/sim_moonraker.py`.
+* Fix: printing the same file again started with the old progress (all printed).
+* Fix: a viewer opened in a hidden tab (or a slicer tab not shown yet) showed nothing until *Fit*.
+* Fix: the spool turned the wrong way (generic CoreXY, MINI+) - every spool now unwinds towards
+  where its filament goes.
 
 ## 0.5.0 – PrintTwin inside your slicer
 

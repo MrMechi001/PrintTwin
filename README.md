@@ -26,13 +26,16 @@ PrintTwin started on the Original Prusa MK4 – **support for more printers is i
 | Original Prusa MINI / MINI+ | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; true-to-size 3D model |
 | Original Prusa XL | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; 3D model with Prusa's parts, frame estimated (approximate) |
 | Prusa CORE One / CORE One L | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY model until their own is done |
-| Klipper printers (Voron, Ender/Creality with Klipper, Sovol, Elegoo …) | Moonraker | 📋 planned |
+| **Klipper printers** (Voron 2.4 / Trident / V0, Sovol SV08, RatRig, Creality K1, Qidi, Elegoo, … – anything with Moonraker) | Moonraker | 🧪 new – tested against a simulated Moonraker, **testers wanted**; generic CoreXY (bed or flying gantry) or bed-slinger model |
 | OctoPrint printers (Prusa MK3S/MK3S+, Ender 3 …) | OctoPrint API | 📋 planned |
 | Bambu Lab (X1, P1, A1) | MQTT on the local network | 📋 planned |
 | True-to-size models for the *Printer* view: CORE One, CORE One L; the XL refined | – | 📋 planned |
 
 PrintTwin asks the printer which model it is (PrusaLink), so the *Printer* view picks the
-right one by itself; `model = "mk4s"` in the config overrides it.
+right one by itself; `model = "mk4s"` in the config overrides it. Klipper doesn't know its
+model: PrintTwin takes the printer name the slicer wrote into the job (PrusaSlicer `V2_350`,
+OrcaSlicer `Voron 2.4 350`, `Creality K1 Max`, …) and else Klipper's kinematics – a quad
+gantry level means a flying gantry (Voron 2.4, Sovol SV08).
 
 Have one of these printers? A short test report helps a lot – see
 [CONTRIBUTING.md](CONTRIBUTING.md#test-printtwin-with-your-printer). PrintTwin is an
@@ -40,8 +43,9 @@ independent project, not affiliated with Prusa Research.
 
 ## Features
 
-* **Live, not a guess**: follows the printer's own nozzle position (~80 Hz) and file
-  position, so the view matches the real print to the extrusion line.
+* **Live, not a guess**: follows the printer's own nozzle position (Prusa ~80 Hz, Klipper
+  ~4 Hz, the nozzle then moves along the toolpath in between) and file position, so the view
+  matches the real print to the extrusion line.
 * **The whole printer** (button *Printer*): a true-to-size MK4, MK4S or MINI+ built from
   Prusa's CAD parts, and an XL with up to five heads – the bed moves, the gantry and print
   head follow the nozzle, the spool unwinds, the display shows the live status, the MK4's
@@ -83,6 +87,23 @@ On the printer: **Settings → Network → Metrics & Log**
 
 The HUD shows what arrives: *Live nozzle position · 80 Hz* when everything is set.
 
+### Klipper printers (Voron & co.)
+
+A `[[printer]]` block with `kind = "moonraker"` (Moonraker comes with Mainsail and Fluidd):
+
+```toml
+[[printer]]
+id = "voron"
+name = "Voron 2.4"
+kind = "moonraker"
+host = "voron.local"          # Mainsail / Fluidd address (port 80), or "192.168.1.30:7125"
+# api_key = "..."             # only if Moonraker asks for one (default: LAN clients are trusted)
+```
+
+PrintTwin reads Klipper's status, the file position and the live toolhead position (Klipper
+updates it 4 times a second; in between the nozzle follows the toolpath) and loads the job
+file from Moonraker. Klipper prints plain `.gcode` only. Nothing to set up on the printer.
+
 ### Optional: PrintTwin inside PrusaSlicer / OrcaSlicer
 
 Set PrintTwin as the slicer's print host: the printer tab of the slicer then shows the live
@@ -102,6 +123,9 @@ PrintTwin keeps a copy of the file, so the model is ready the moment the print s
      e.g. `http://192.168.1.20:8790/p/mk4` (the `id` from `config.local.toml`)
    * Authorization type **API key**: the printer's PrusaLink password / API key (printer:
      *Settings → Network → PrusaLink*), then *Test*.
+   * **Klipper printers**: host type **Klipper (via Moonraker)** (PrusaSlicer) or **Moonraker
+     (Klipper)** (OrcaSlicer 2.4+) – *OctoPrint* / *Octo/Klipper* works too if Moonraker has
+     `[octoprint_compat]`; API key only if your Moonraker wants one.
 3. PrusaSlicer shows a tab with the printer's name, OrcaSlicer the *Device* tab – both now
    show PrintTwin.
 
@@ -109,6 +133,10 @@ PrintTwin passes every call on to the printer unchanged, with the key the slicer
 it adds no credentials of its own, so it can do nothing the slicer couldn't do on the
 printer directly. Use the API key: user name/password (digest) logins only work with the
 address without `/p/<printer id>` (`http://<PC>:8790`, one printer in the config).
+Klipper: Moonraker usually trusts every device on the LAN by its address, so PrintTwin passes
+on only the slicer's calls (connection test, upload, start the uploaded file) – no G-code,
+no emergency stop, no file deletion, no reboot – and, without an API key, only from LAN
+addresses. OrcaSlicer's experimental "printer agent" (off by default) is not supported.
 OrcaSlicer only: to keep uploading straight to the printer and only show PrintTwin, leave
 the printer as host and put the PrintTwin address into *Device UI* (`print_host_webui`).
 
@@ -136,7 +164,10 @@ up while the file downloads.
   stop or change anything on its own.
 * As the slicer's print host (`[slicer] print_host = true`, off by default) it passes the
   slicer's calls on to the printer – with the key the slicer sends, never with its own. Without
-  the printer's API key nobody can upload or print through it.
+  the printer's API key nobody can upload or print through it. Klipper printers usually trust
+  the whole LAN (Moonraker `trusted_clients`): there PrintTwin passes on only uploads and the
+  start of an uploaded file, and only from LAN addresses unless the slicer sends Moonraker's
+  API key.
 * The API key stays in `config.local.toml` on your computer; the browser never sees it.
 * The viewer has **no login**: anyone on your network can watch. Keep it there – don't
   forward the port on your router. For remote viewing use a VPN such as Tailscale.
@@ -157,7 +188,8 @@ up while the file downloads.
                 tool / filament changes and colours)
    tracker.py   file position + nozzle xyz → "printed" = segment index + fraction
    server.py    HTTP + Server-Sent Events
-   slicerhost.py  print host for PrusaSlicer / OrcaSlicer: PrusaLink calls passed through, uploads kept
+   moonraker.py   Klipper printers: Moonraker status ~4 Hz (file position, live toolhead position)
+   slicerhost.py  print host for PrusaSlicer / OrcaSlicer: the slicer's calls passed through, uploads kept
                            ▼
  web/ (three.js)  one instanced draw call for all segments; a single uniform
                   (segment count) decides what is printed, so playback is free
@@ -236,14 +268,18 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 * `python -I tests/test_toolpath.py` – parser: `.gcode` == `.bgcode`, other slicers,
   incremental decoding; `python -I tests/test_bridge.py` – end-to-end with a simulated printer;
-  `tests/test_slicerhost.py` – the slicer print host; `tests/test_models.py` – printer
-  detection; `tests/test_glb_models.py` – the 3D printer models.
+  `tests/test_slicerhost.py` – the slicer print host; `tests/test_moonraker.py` – Klipper
+  printers end to end; `tests/test_models.py` – printer detection; `tests/test_glb_models.py`
+  – the 3D printer models.
 * `python -I tools/sim_printer.py JOB.bgcode --kbps 18 [--handover] [--type 3.1.0]` – a fake
   PrusaLink printer plus the bridge on port 8791: try PrintTwin without a printer; `--type`
   picks the printer it pretends to be (PrusaLink type codes in `printtwin/models.py`, e.g.
   `1.4.1` MK4S, `2.1.0` MINI, `3.1.0` XL). It is also a print host for a slicer:
   `http://localhost:8791/p/sim`, host type PrusaLink, API key `sim` – *Upload and print*
   makes the upload the simulated job.
+* `python -I tools/sim_moonraker.py JOB.gcode [--qgl] [--duration 120] [--api-key K] [--rewrite]`
+  – the same for a Klipper printer: a simulated Moonraker (port 7125) plus the bridge on
+  port 8793; print host `http://localhost:8793/p/sim`, host type Klipper (via Moonraker).
 * `tools/cad/build_mk4.py`, `build_mini.py`, `build_xl.py` – rebuild the 3D printer models
   (needs CadQuery and the CAD downloads named in each script).
 * `tools/probe_api.py`, `tools/probe_metrics.py` – inspect a real printer
@@ -253,13 +289,13 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 **More printers** (see [Supported printers](#supported-printers))
-* Klipper / Moonraker, OctoPrint and Bambu Lab adapters next to PrusaLink.
+* OctoPrint and Bambu Lab adapters next to PrusaLink and Moonraker (Klipper).
 * True-to-size models for the *Printer* view: CORE One and CORE One L next (MK4, MK4S and
-  MINI+ are done, the XL is approximate); generic bed-slinger / CoreXY models for everything else.
+  MINI+ are done, the XL is approximate), then the Voron 2.4 and Trident from the Voron CAD
+  (GPL-3.0); generic bed-slinger / CoreXY / flying-gantry models for everything else.
 
-**Inside your slicer** (✅ PrusaLink printers, see [above](#optional-printtwin-inside-prusaslicer--orcaslicer))
-* Next: the same for Klipper / Moonraker printers (Voron & co.) with the Moonraker adapter,
-  and a compact view for the slicer tab.
+**Inside your slicer** (✅ PrusaLink and Klipper printers, see [above](#optional-printtwin-inside-prusaslicer--orcaslicer))
+* Next: a compact view for the slicer tab.
 
 **Control the printer from the 3D view** (opt-in, behind a login)
 * Start, pause and stop prints, upload jobs and manage a print queue right where you watch

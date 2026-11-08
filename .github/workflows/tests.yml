@@ -26,3 +26,5 @@ jobs:
         run: python -I tests/test_bridge.py
       - name: Slicer print host
         run: python -I tests/test_slicerhost.py
+      - name: Klipper / Moonraker end-to-end (simulated printer)
+        run: python -I tests/test_moonraker.py

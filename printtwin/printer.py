@@ -1,4 +1,14 @@
-"""PrusaLink printer: status poller, job-file loader, metrics tracker, pub/sub."""
+"""Printers: the shared part (job-file loader, tracker, pub/sub) and the PrusaLink adapter.
+
+An adapter (PrusaLinkPrinter here, MoonrakerPrinter in moonraker.py) reads the printer's
+status into the common shape below and says which job runs and how to download its file:
+
+  status = {"printer": {"state": "IDLE|BUSY|PRINTING|PAUSED|FINISHED|STOPPED|ERROR|ATTENTION",
+                        "temp_nozzle", "target_nozzle", "temp_bed", "target_bed",
+                        "axis_x", "axis_y", "axis_z", "speed", "flow", "fan_print", "fan_hotend"},
+            "job": {"id", "progress" (0-100), "time_remaining", "time_printing"} or None}
+  job    = {"id", "display_name", "name", "download", "size", "m_timestamp"}
+"""
 from __future__ import annotations
 
 import gzip
@@ -12,7 +22,7 @@ from pathlib import Path
 
 from . import incoming, models
 from .metrics import parse_datagram
-from .prusalink import PrusaLink
+from .prusalink import PrusaLink, split_host
 from .toolpath import JobDecoder, load_file
 from .tracker import Tracker
 
@@ -29,18 +39,22 @@ class _Superseded(Exception):
     """A newer job started while this one was still downloading."""
 
 
-class PrusaLinkPrinter:
-    kind = "prusalink"
+class BasePrinter:
+    """Everything that doesn't depend on how the printer is asked: see the module docstring."""
+    kind = "?"
+    poll_s = POLL_S
+    tracker_args: dict = {}                  # Tracker(window_back=..., sdpos_lag=...) for this kind
 
     def __init__(self, cfg: dict, cache_dir: Path, incoming_dir: Path = incoming.INCOMING):
         self.id = cfg["id"]
         self.name = cfg.get("name", self.id)
         self.host = cfg["host"]
-        self.client = PrusaLink(self.host, cfg["api_key"])
+        self.http_netloc, self.http_prefix = split_host(self.host)   # for the slicer pass-through
         self.cache_dir = cache_dir
         self.incoming_dir = incoming_dir
         self.model_cfg = str(cfg.get("model", "auto"))   # printer model to show, "auto" = detect
         self.printer_type: str | None = None             # PrusaLink /api/version "printer", e.g. "1.4.0"
+        self.volume: dict | None = None                  # build volume the printer reports (Klipper)
         self.lock = threading.RLock()
         self.subs: set[queue.Queue] = set()
 
@@ -62,6 +76,8 @@ class PrusaLinkPrinter:
 
         self.last_pos_wall = 0.0
         self.last_sdpos_wall = 0.0
+        self.last_sdpos: int | None = None    # last file position of the current job (seeds a new tracker)
+        self._offline_why: str | None = None
         self.pos_rate = 0.0
         self._rate_n = 0
         self._rate_t0 = time.time()
@@ -114,6 +130,7 @@ class PrusaLinkPrinter:
                 "time_printing": jb.get("time_printing"),
                 "job": None if not self.job else {"id": self.job.get("id"),
                                                   "name": self.job.get("display_name")},
+                "volume": self.volume,
                 "toolpath_key": self.tp_key,
                 "toolpath_count": self.tp.count if self.tp else 0,
                 "toolpath_complete": bool(self.tp and self.tp.complete),
@@ -140,15 +157,38 @@ class PrusaLinkPrinter:
     def start(self):
         threading.Thread(target=self._poll_loop, name=f"poll-{self.id}", daemon=True).start()
 
+    # adapter hooks ---------------------------------------------------------
+    def _fetch_status(self) -> dict | None:
+        """The printer's status in the common shape, None if it didn't answer properly."""
+        raise NotImplementedError
+
+    def _on_online(self):
+        """Called once when the printer answers (again): read its type, volume, ..."""
+
+    def _current_job(self, data: dict) -> dict | None:
+        """The job dict when a new job is running (None: no change / no job)."""
+        raise NotImplementedError
+
+    def _stream(self, job: dict, on_chunk):
+        """Download the job file, handing every piece to on_chunk(data, bytes_so_far, total)."""
+        raise NotImplementedError
+
+    def _not_handed_out(self, e: Exception) -> bool:
+        """The printer refused the job file (it may hand it out later)."""
+        return isinstance(e, urllib.error.HTTPError) and e.code == 404
+
+    # ----------------------------------------------------------------- poller
     def _poll_loop(self):
         while True:
             try:
-                code, data = self.client.get_json("/api/v1/status")
-                ok = code == 200 and isinstance(data, dict)
-            except Exception as e:  # network hiccup, printer off, ...
-                ok, data = False, None
-                if self.online:
-                    log(self.id, "offline:", e)
+                data = self._fetch_status()
+                ok = isinstance(data, dict)
+                why = None if ok else "no valid status answer"
+            except Exception as e:  # network hiccup, printer off, wrong key, ...
+                ok, data, why = False, None, str(e) or repr(e)
+            if why and why != self._offline_why:     # say why - once, and again when the reason changes
+                log(self.id, "offline:" if self.online else "not reachable:", why)
+            self._offline_why = why
             with self.lock:
                 came_online = ok and not self.online
                 if came_online:
@@ -156,35 +196,31 @@ class PrusaLinkPrinter:
                 self.online = ok
                 if ok:
                     self.status = data
-            if came_online and self.printer_type is None:
+            if came_online:
                 try:
-                    _, ver = self.client.get_json("/api/version")
-                    self.printer_type = (ver or {}).get("printer")
-                    model, src = models.resolve(self.model_cfg, None, self.printer_type)
-                    log(self.id, f"printer type {self.printer_type!r} -> model {model or 'unknown'} ({src})")
+                    self._on_online()
                 except Exception as e:
-                    log(self.id, f"could not read /api/version: {e!r}")
+                    log(self.id, f"could not read the printer's details: {e!r}")
             if ok:
                 try:
                     self._on_status(data)
                 except Exception:
                     traceback.print_exc()
-            self.publish_state()
-            time.sleep(POLL_S)
+            self.publish_state(force=self.poll_s >= 1.0)
+            time.sleep(self.poll_s)
 
     def _on_status(self, data: dict):
         pr = data.get("printer") or {}
         jb = data.get("job")
         state = pr.get("state")
-        if jb and (not self.job or self.job.get("id") != jb.get("id")):
-            code, job = self.client.get_json("/api/v1/job")
-            if code == 200 and job and job.get("file"):
-                f = job["file"]
-                with self.lock:
-                    self.job = {"id": job["id"], "display_name": f.get("display_name") or f.get("name"),
-                                "download": f["refs"]["download"], "size": f.get("size"),
-                                "m_timestamp": f.get("m_timestamp"), "name": f.get("name")}
-                log(self.id, f"job {job['id']}: {self.job['display_name']}")
+        job = self._current_job(data)
+        if job:
+            with self.lock:
+                self.job = job
+                # the same file again (a reprint): its toolpath stays, the progress starts over
+                if f"{job['m_timestamp']}_{job['size']}" == self.tp_cache_key and self.tp is not None:
+                    self.tracker = Tracker(self.tp, **self.tracker_args)
+            log(self.id, f"job {job['id']}: {job['display_name']}")
         if self.job:
             key = f"{self.job['m_timestamp']}_{self.job['size']}"
             r = self._retry
@@ -202,7 +238,7 @@ class PrusaLinkPrinter:
                 return
             if state == "FINISHED":
                 tr.finish()
-            elif time.time() - self.last_pos_wall > METRICS_STALE_S:
+            elif time.time() - self.last_pos_wall > METRICS_STALE_S:     # no live nozzle position
                 if time.time() - self.last_sdpos_wall < METRICS_STALE_S:
                     tr.from_sdpos_only()
                 else:
@@ -263,7 +299,7 @@ class PrusaLinkPrinter:
                                         "progressive": True}
                     self.publish_state(force=False)
 
-                self.client.stream(job["download"], on_chunk)
+                self._stream(job, on_chunk)
             with self.tp_lock:
                 dec.finish()
             tmp.replace(path)
@@ -275,7 +311,7 @@ class PrusaLinkPrinter:
         except Exception as e:
             n = self._retry[1] + 1 if self._retry and self._retry[0] == key else 1
             wait = RETRY_S[min(n, len(RETRY_S)) - 1]
-            if isinstance(e, urllib.error.HTTPError) and e.code == 404:
+            if self._not_handed_out(e):
                 msg = "the printer doesn't hand out the job file yet (e.g. sent via Prusa Connect) - retrying"
             else:
                 msg = str(e)
@@ -292,6 +328,16 @@ class PrusaLinkPrinter:
                     self._retry = (key, n, time.time() + wait)
             self.publish_state()
 
+    def _catch_up(self, tracker):
+        """Progress for a toolpath that is complete now, before live positions say more."""
+        pr = (self.status or {}).get("printer") or {}
+        if pr.get("state") == "FINISHED":
+            tracker.finish()
+        elif pr.get("state") == "PAUSED" and tracker.sdpos is not None:
+            tracker.from_sdpos_only()                # paused: the file position is where it stopped
+        else:                                        # capped at the file position when there is one
+            tracker.from_axis_z(pr.get("axis_z"), ((self.status or {}).get("job") or {}).get("progress"))
+
     def _install(self, tp, key: str, gen: int, job: dict):
         """Make `tp` the current toolpath (complete, or still growing)."""
         if self._gen != gen:
@@ -305,17 +351,14 @@ class PrusaLinkPrinter:
         with self.lock:
             same = self.tp is tp
             if not same:
-                tracker = Tracker(tp)
-                pr = (self.status or {}).get("printer") or {}
-                if tp.complete and pr.get("state") == "FINISHED":
-                    tracker.finish()
-                elif tp.complete:
-                    tracker.from_axis_z(pr.get("axis_z"), ((self.status or {}).get("job") or {}).get("progress"))
+                tracker = Tracker(tp, **self.tracker_args)
+                if self.last_sdpos is not None:     # the printer's file position caps what counts as done
+                    tracker.feed_sdpos(self.last_sdpos)
+                if tp.complete:
+                    self._catch_up(tracker)
                 self.tracker = tracker
-            elif tp.complete and self.tracker:
-                pr = (self.status or {}).get("printer") or {}
-                if pr.get("state") == "FINISHED":
-                    self.tracker.finish()
+            elif tp.complete and self.tracker:       # the download just finished
+                self._catch_up(self.tracker)
             self.tp, self.tp_key, self.tp_cache_key, self.tp_name = tp, f"{key}.{gen}", key, job.get("display_name")
             self.tp_gz, self.tp_info = gz, info
             if tp.complete:
@@ -348,6 +391,68 @@ class PrusaLinkPrinter:
         n = tp.count
         return key, n, tp.to_bin(start, n), False
 
+    # ------------------------------------------------------ live position input
+    def _feed(self, sdpos: int | None, pos: list | None, now: float | None = None) -> list:
+        """File position and/or nozzle sample [t_ms, x, y, z] into the tracker; returns the
+        sample with the tracker's progress appended (for the "pos" event), or []. Call with
+        self.lock held."""
+        now = now or time.time()
+        tr = self.tracker
+        if sdpos is not None:
+            self.last_sdpos_wall = now
+            self.last_sdpos = sdpos
+            if tr:
+                tr.feed_sdpos(sdpos)
+        if pos is None:
+            return []
+        t, x, y, z = pos
+        self.last_pos_wall = now
+        self._rate_n += 1
+        dt = now - self._rate_t0
+        if dt >= 2.0:
+            self.pos_rate = self._rate_n / dt
+            self._rate_n, self._rate_t0 = 0, now
+        if not tr:
+            return []
+        p = tr.feed_pos(x, y, z)
+        return [round(t, 1), round(x, 3), round(y, 3), round(z, 3), round(p, 3)]
+
+
+class PrusaLinkPrinter(BasePrinter):
+    """Original Prusa printers with PrusaLink: HTTP status every 2 s + UDP firmware metrics."""
+    kind = "prusalink"
+
+    def __init__(self, cfg: dict, cache_dir: Path, incoming_dir: Path = incoming.INCOMING):
+        super().__init__(cfg, cache_dir, incoming_dir)
+        self.client = PrusaLink(self.host, cfg["api_key"])
+
+    def _fetch_status(self) -> dict | None:
+        code, data = self.client.get_json("/api/v1/status")
+        return data if code == 200 and isinstance(data, dict) else None
+
+    def _on_online(self):
+        if self.printer_type is None:
+            _, ver = self.client.get_json("/api/version")
+            self.printer_type = (ver or {}).get("printer")
+            model, src = models.resolve(self.model_cfg, None, self.printer_type)
+            log(self.id, f"printer type {self.printer_type!r} -> model {model or 'unknown'} ({src})")
+
+    def _current_job(self, data: dict) -> dict | None:
+        jb = data.get("job")
+        if not jb or (self.job and self.job.get("id") == jb.get("id")):
+            return None
+        code, job = self.client.get_json("/api/v1/job")
+        if code != 200 or not job or not job.get("file"):
+            return None
+        self.last_sdpos = None                       # sdpos from the previous job no longer counts
+        f = job["file"]
+        return {"id": job["id"], "display_name": f.get("display_name") or f.get("name"),
+                "download": f["refs"]["download"], "size": f.get("size"),
+                "m_timestamp": f.get("m_timestamp"), "name": f.get("name")}
+
+    def _stream(self, job: dict, on_chunk):
+        self.client.stream(job["download"], on_chunk)
+
     # ---------------------------------------------------------------- metrics
     def on_datagram(self, payload: bytes):
         r = parse_datagram(payload)
@@ -357,13 +462,10 @@ class PrusaLinkPrinter:
         out = []
         now = time.time()
         with self.lock:
-            tr = self.tracker
             pend = self._pending
             for t_us, name, _, f in samples:
                 if name == "sdpos":
-                    self.last_sdpos_wall = now
-                    if tr:
-                        tr.feed_sdpos(f["v"])
+                    self._feed(f["v"], None, now)
                 elif name == "pos_x":
                     pend.clear()
                     pend["t"], pend["x"] = t_us, f["v"]
@@ -372,14 +474,8 @@ class PrusaLinkPrinter:
                 elif name == "pos_z" and "y" in pend:
                     x, y, z, t = pend["x"], pend["y"], f["v"], pend["t"]
                     pend.clear()
-                    self.last_pos_wall = now
-                    self._rate_n += 1
-                    if tr:
-                        p = tr.feed_pos(x, y, z)
-                        out.append([round(t / 1000, 1), round(x, 3), round(y, 3), round(z, 3), round(p, 3)])
-            dt = now - self._rate_t0
-            if dt >= 2.0:
-                self.pos_rate = self._rate_n / dt
-                self._rate_n, self._rate_t0 = 0, now
+                    sample = self._feed(None, [t / 1000, x, y, z], now)
+                    if sample:
+                        out.append(sample)
         if out:
             self.publish("pos", {"s": out, "key": self.tp_key})

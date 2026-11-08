@@ -43,5 +43,27 @@ check("job when printer unknown", models.resolve("auto", "COREONE", None), ("cor
 check("nothing known", models.resolve(None, None, None), (None, "unknown"))
 check("bad config value", models.resolve("ender", None, "1.4.0"), (None, "config"))
 
+# Klipper printers: slicer names (PrusaSlicer ids + OrcaSlicer names) and kinematics
+for s, want in [("V2_350", "corexy_gantry"), ("V2_250", "corexy_gantry"), ("Voron_v2_300_afterburner", "corexy_gantry"),
+                ("Voron 2.4 350", "corexy_gantry"), ("VT_300", "corexy"), ("Voron Trident 250", "corexy"),
+                ("V0_120", "corexy"), ("Voron_v0_120", "corexy"), ("Voron 0.1", "corexy"),
+                ("Voron_v1_250_afterburner", "corexy"), ("VS_MK52", "bedslinger"), ("Voron_SW", "bedslinger"),
+                ("Voron Switchwire 250", "bedslinger"), ("Sovol SV08", "corexy_gantry"), ("Sovol SV08 MAX", "corexy_gantry"),
+                ("Sovol SV07", "bedslinger"), ("Sovol Zero", "corexy"), ("RatRig V-Core 3 300", "corexy"),
+                ("VC4_300_XY", "corexy"), ("RatRig V-Minion", "bedslinger"), ("Creality K1 Max", "corexy"),
+                ("Creality K2 Plus", "corexy"), ("Creality Ender-3 V3 KE", "bedslinger"), ("Creality Hi", "bedslinger"),
+                ("Qidi Q1 Pro", "corexy"), ("Q1 Pro", "corexy"), ("X-Plus 3", "corexy"), ("X-MAX 3", "corexy"),
+                ("Elegoo Neptune 4 Pro", "bedslinger"), ("Anycubic Kobra 3", "bedslinger"),
+                ("Anycubic Kobra S1", "corexy"), ("XL5IS", "xl")]:
+    check(f"slicer {s!r}", models.from_slicer(s), want)
+for t, want in [("klipper/corexy", "corexy"), ("klipper/corexy+qgl", "corexy_gantry"), ("klipper/cartesian", "bedslinger"),
+                ("klipper/corexz", "bedslinger"), ("klipper/delta", None), ("1.4.0", None)]:
+    check(f"klipper {t}", models.from_klipper(t), want)
+check("klipper: the job's model first", models.resolve("auto", "VT_300", "klipper/corexy+qgl"), ("corexy", "job"))
+check("klipper: kinematics when the job says nothing", models.resolve("auto", None, "klipper/corexy+qgl"),
+      ("corexy_gantry", "printer"))
+check("klipper: config wins", models.resolve("bedslinger", "V2_350", "klipper/corexy"), ("bedslinger", "config"))
+check("klipper: delta, unknown job -> unknown", models.resolve("auto", "FLSun V400", "klipper/delta"), (None, "unknown"))
+
 print("\nall passed" if not failures else f"\n{failures} FAILED")
 sys.exit(1 if failures else 0)

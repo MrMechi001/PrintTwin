@@ -11,10 +11,11 @@ from pathlib import Path
 
 from . import __version__, config, incoming
 from .config import ROOT
+from .moonraker import MoonrakerPrinter
 from .printer import PrusaLinkPrinter, log
 from .server import serve
 
-KINDS = {"prusalink": PrusaLinkPrinter}
+KINDS = {"prusalink": PrusaLinkPrinter, "moonraker": MoonrakerPrinter}
 PLACEHOLDERS = {"192.168.x.y", "PRUSALINK-API-KEY", ""}
 
 
@@ -63,7 +64,8 @@ def main(argv=None):
         sys.exit(1)
     cfg = config.load(args.config)
     pending = [pc.get("id", "?") for pc in cfg.get("printer", [])
-               if str(pc.get("host", "")).strip() in PLACEHOLDERS or str(pc.get("api_key", "")).strip() in PLACEHOLDERS]
+               if str(pc.get("host", "")).strip() in PLACEHOLDERS
+               or (pc.get("kind", "prusalink") == "prusalink" and str(pc.get("api_key", "")).strip() in PLACEHOLDERS)]
     if pending or not cfg.get("printer"):
         print(f"Please enter your printer's IP address and PrusaLink API key in "
               f"{args.config or config.DEFAULT_CONFIG} (printer {', '.join(pending) or '- none configured -'}).")
@@ -77,11 +79,16 @@ def main(argv=None):
         if cls is None:
             log(f"skipping printer {pc.get('id')}: unknown kind {pc.get('kind')!r}")
             continue
-        printers[pc["id"]] = cls(pc, cache, handover)
+        try:
+            printers[pc["id"]] = cls(pc, cache, handover)
+        except (KeyError, ValueError) as e:
+            log(f"skipping printer {pc.get('id')}: {e}")
     by_ip = {}
     for p in printers.values():
+        if not hasattr(p, "on_datagram"):           # UDP firmware metrics: Prusa printers only
+            continue
         try:
-            by_ip[socket.gethostbyname(p.host.split(":")[0])] = p
+            by_ip[socket.gethostbyname(p.http_netloc.split(":")[0])] = p
         except OSError as e:
             log(f"{p.id}: cannot resolve {p.host}: {e}")
     s = cfg["server"]
@@ -101,8 +108,11 @@ def main(argv=None):
         p.start()
     log(f"PrintTwin {__version__} - viewer: {url}  ({len(printers)} printer(s))")
     if cfg["slicer"]["print_host"]:
-        log("print host for PrusaSlicer / OrcaSlicer (host type PrusaLink, the printer's API key): "
-            + ", ".join(f"http://<this PC>:{s['port']}/p/{pid}" for pid in printers))
+        host_type = {"prusalink": "PrusaLink, the printer's API key",
+                     "moonraker": 'Klipper (via Moonraker) / Moonraker (Klipper) or OctoPrint'}
+        for p in printers.values():
+            log(f"print host for PrusaSlicer / OrcaSlicer: http://<this PC>:{s['port']}/p/{p.id}  "
+                f"(host type {host_type.get(p.kind, p.kind)})")
     if args.open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:

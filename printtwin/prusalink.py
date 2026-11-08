@@ -1,4 +1,4 @@
-"""Minimal PrusaLink HTTP client (stdlib only)."""
+"""Minimal HTTP client for printer APIs - PrusaLink, Moonraker (stdlib only)."""
 from __future__ import annotations
 
 import json
@@ -8,14 +8,29 @@ from pathlib import Path
 from typing import Callable
 
 
+def split_host(host: str) -> tuple[str, str]:
+    """"192.168.1.5", "voron.local:7125" or "http://voron.local/moonraker" -> (host[:port], path prefix)."""
+    h = str(host).strip()
+    if h.lower().startswith("https://"):
+        raise ValueError(f"host {host!r}: https is not supported - use the printer's plain http address "
+                         f"(e.g. voron.local or 192.168.1.30:7125)")
+    if h.lower().startswith("http://"):
+        h = h[len("http://"):]
+    netloc, _, prefix = h.partition("/")
+    return netloc, ("/" + prefix.strip("/")) if prefix.strip("/") else ""
+
+
 class PrusaLink:
+    """HTTP client used for PrusaLink and Moonraker alike (X-Api-Key, JSON, streamed downloads)."""
     def __init__(self, host: str, api_key: str, timeout: float = 10.0):
-        self.base = f"http://{host}"
+        netloc, prefix = split_host(host)
+        self.base = f"http://{netloc}{prefix}"
         self.key = api_key
         self.timeout = timeout
 
     def _open(self, path: str, timeout: float | None = None):
-        req = urllib.request.Request(self.base + path, headers={"X-Api-Key": self.key})
+        # no key configured (e.g. Moonraker with trusted clients): send no X-Api-Key at all
+        req = urllib.request.Request(self.base + path, headers={"X-Api-Key": self.key} if self.key else {})
         return urllib.request.urlopen(req, timeout=timeout or self.timeout)
 
     def get_json(self, path: str):

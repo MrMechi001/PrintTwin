@@ -23,8 +23,12 @@ Z_TOL = 1.5                # pos_z includes mesh-bed-levelling offset (seen -0.8
 
 
 class Tracker:
-    def __init__(self, tp: Toolpath):
+    def __init__(self, tp: Toolpath, window_back: int = WINDOW_BACK, sdpos_lag: int = SDPOS_LAG_MOVES):
+        """window_back: how many segments before the file position the nozzle may be (Prusa: the
+        planner holds a few moves; Klipper reads ~1 s of motion ahead, thousands of short moves)."""
         self.tp = tp
+        self.window_back = window_back
+        self.sdpos_lag = sdpos_lag
         self.sdpos: int | None = None
         self.printed = 0.0
         self.nozzle: tuple[float, float, float] | None = None
@@ -62,7 +66,7 @@ class Tracker:
             return self.printed
         k = self._sd_index()
         cur = int(self.printed)
-        lo = max(0, k - WINDOW_BACK, cur - 2)
+        lo = max(0, k - self.window_back, cur - 2)
         hi = min(n, k + 3)
         st, en = tp.start, tp.end
         best_d, best_j, best_u = 1e18, -1, 0.0
@@ -89,7 +93,7 @@ class Tracker:
 
     def from_sdpos_only(self) -> float:
         if self.sdpos is not None and self.tp.count:
-            p = float(max(0, self._sd_index() - SDPOS_LAG_MOVES))
+            p = float(max(0, self._sd_index() - self.sdpos_lag))
             if p > self.printed:
                 self.printed = p
                 b = 3 * min(int(p), self.tp.count - 1)

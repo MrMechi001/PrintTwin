@@ -7,6 +7,7 @@ const TYPE_COLORS = [
   '#f2f2f2', '#14937a', '#3ccf4e', '#1f7a2e', '#b3e3ab', '#ff9a78', '#5ed194', '#bdbdbd',
 ];
 const PLAYBACK_DELAY_MS = 450;   // UDP metrics arrive in ~150 ms bursts; play back slightly delayed
+const SPARSE_MS = 120;           // samples further apart (Klipper: ~250 ms): move along the toolpath
 const LIVE_TIMEOUT_MS = 2500;
 
 const $ = (id) => document.getElementById(id);
@@ -36,9 +37,12 @@ scene.add(sun);
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
+  if (!w || !h) return;                 // hidden (background tab, slicer tab not shown yet): keep the last size
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  // framed while there was no size (0/0 aspect): the camera is lost - frame again now
+  if (![camera.position.x, camera.position.y, camera.position.z].every(Number.isFinite)) fit();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -438,7 +442,8 @@ function fit() {
   const c = new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
   const radius = Math.max(20, 0.5 * Math.hypot(x1 - x0, y1 - y0, z1 - z0));
   const halfV = THREE.MathUtils.degToRad(camera.fov / 2);
-  const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
+  const aspect = camera.aspect > 0 && Number.isFinite(camera.aspect) ? camera.aspect : 1;   // no size yet
+  const halfH = Math.atan(Math.tan(halfV) * aspect);
   const dist = (radius / Math.sin(Math.min(halfV, halfH))) * (printerMode ? 0.84 : 0.9);
   const dir = printerMode ? new THREE.Vector3(0.5, -0.76, 0.42) : new THREE.Vector3(0, -0.74, 0.67);
   if (printerMode && camera.aspect > 0.8) c.add(new THREE.Vector3(-45, 0, 30));   // keep the HUD (top left) clear
@@ -478,13 +483,18 @@ const wantedModel = () => state?.model || 'bedslinger';
 const detectionPending = () => Boolean(state && !state.model && state.online && state.printer_type == null
   && performance.now() - firstStateAt < 5000);
 
+// size of a generic printer model: the bed from the job (slicer bed_shape), the height - and the
+// bed, without a job - from the travel limits the printer reports (Klipper axis_minimum/maximum)
 function jobVolume() {
+  const v = state?.volume, h = v ? Math.round(v.max[2]) : 250;
   const s = tp?.info?.bed_shape;
-  if (!s) return undefined;
-  const p = s.split(',').map((q) => q.split('x').map(Number));
-  if (!p.every((q) => q.length === 2 && q.every(Number.isFinite))) return undefined;
-  const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
-  return { bed: [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)], height: 250 };
+  const p = s ? s.split(',').map((q) => q.split('x').map(Number)) : [];
+  if (p.length && p.every((q) => q.length === 2 && q.every(Number.isFinite))) {
+    const xs = p.map((q) => q[0]), ys = p.map((q) => q[1]);
+    return { bed: [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)], height: h };
+  }
+  return v ? { bed: [Math.round(v.max[0] - Math.max(0, v.min[0])), Math.round(v.max[1] - Math.max(0, v.min[1]))], height: h }
+    : undefined;
 }
 
 function ensurePrinter(key = wantedModel()) {
@@ -555,11 +565,44 @@ async function setPrinterMode(on) {
 
 // ------------------------------------------------------------------ live data
 const buf_ = [];            // [t_ms, x, y, z, printed]
-let tLast = 0, wallLast = -1e9, playT = null;
+let tLast = 0, wallLast = -1e9, playT = null, sampleGap = 20;   // ms between position samples (smoothed)
+
+// path length at toolpath position `count` (segments + fraction) and back
+function cumAt(count) {
+  const n = tp.n;
+  if (!n) return 0;
+  const i = Math.max(0, Math.min(Math.floor(count), n - 1));
+  return tp.cum[i] + Math.max(0, Math.min(1, count - i)) * tp.segLen[i];
+}
+function countAtCum(c) {
+  let lo = 0, hi = tp.n;                       // largest i with cum[i] <= c
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (tp.cum[mid] <= c) lo = mid; else hi = mid - 1;
+  }
+  const i = Math.min(lo, tp.n - 1);
+  return i + (tp.segLen[i] > 0 ? Math.max(0, Math.min(1, (c - tp.cum[i]) / tp.segLen[i])) : 0);
+}
+// a live sample [t, x, y, z, printed] that sits on the toolpath at its printed position (not a
+// travel move, park position or pause); 2 mm leaves room for the bed-mesh Z in the live position
+function onPath(s) {
+  const q = pointAt(s[4]);
+  return Math.hypot(q[0] - s[1], q[1] - s[2]) < 2 && Math.abs(q[2] - s[3]) < 2;
+}
+function pointAt(count) {
+  const i = Math.max(0, Math.min(Math.floor(count), tp.n - 1)), u = Math.max(0, Math.min(1, count - i));
+  const s = tp.arr.s, e = tp.arr.e, j = 3 * i;
+  return [s[j] + (e[j] - s[j]) * u, s[j + 1] + (e[j + 1] - s[j + 1]) * u, s[j + 2] + (e[j + 2] - s[j + 2]) * u];
+}
 
 function onPos(d) {
   if (!tp || d.key !== tp.key) return;
-  for (const s of d.s) buf_.push(s);
+  for (const s of d.s) {
+    const last = buf_[buf_.length - 1];
+    if (last && s[0] < last[0] - 1000) { buf_.length = 0; playT = null; }   // printer / Klipper host restarted
+    else if (last && s[0] > last[0]) sampleGap += (Math.min(2000, s[0] - last[0]) - sampleGap) * 0.1;
+    buf_.push(s);
+  }
   if (buf_.length > 3000) buf_.splice(0, buf_.length - 3000);
   tLast = buf_[buf_.length - 1][0];
   wallLast = performance.now();
@@ -718,15 +761,25 @@ function frame(now) {
   lastFrame = now;
   let count = null, nz = null;
   if (tp && buf_.length && now - wallLast < LIVE_TIMEOUT_MS) {
-    const target = tLast + (now - wallLast) - PLAYBACK_DELAY_MS;
-    if (playT === null || Math.abs(target - playT) > 800) playT = target;
+    const sparse = sampleGap > SPARSE_MS;
+    const delay = sparse ? Math.max(PLAYBACK_DELAY_MS, 2.2 * sampleGap) : PLAYBACK_DELAY_MS;
+    const target = tLast + (now - wallLast) - delay;
+    if (playT === null || Math.abs(target - playT) > Math.max(800, 3 * sampleGap)) playT = target;
     else playT += dt + (target - playT) * 0.05;
     while (buf_.length > 2 && buf_[1][0] <= playT) buf_.shift();
     const a = buf_[0], b = buf_[1];
     if (b && playT > a[0]) {
       const u = Math.min(1, (playT - a[0]) / Math.max(1, b[0] - a[0]));
-      nz = [a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u, a[3] + (b[3] - a[3]) * u];
-      count = a[4] + (b[4] - a[4]) * u;
+      if (sparse && tp.n && b[4] > a[4] && b[4] - a[4] < 5000 && onPath(a) && onPath(b)) {
+        // few samples (Klipper): follow the toolpath between them at constant speed along it,
+        // instead of cutting straight across the part
+        const ca = cumAt(a[4]), cb = cumAt(b[4]);
+        count = countAtCum(ca + (cb - ca) * u);
+        nz = pointAt(count);
+      } else {
+        nz = [a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u, a[3] + (b[3] - a[3]) * u];
+        count = a[4] + (b[4] - a[4]) * u;
+      }
     } else {
       nz = [a[1], a[2], a[3]];
       count = a[4];

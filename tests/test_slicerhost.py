@@ -83,9 +83,14 @@ class FakePrinter(BaseHTTPRequestHandler):
 
 
 class Stub:
-    """The part of a PrusaLinkPrinter the pass-through uses."""
-    def __init__(self, pid, host, folder):
-        self.id, self.name, self.kind, self.host, self.incoming_dir = pid, pid, "prusalink", host, folder
+    """The part of a printer the pass-through uses."""
+    def __init__(self, pid, host, folder, kind="prusalink"):
+        self.id, self.name, self.kind, self.host, self.incoming_dir = pid, pid, kind, host, folder
+        self.http_prefix = ""
+
+    @property
+    def http_netloc(self):
+        return self.host
 
 
 def request(port, method, path, body=b"", headers=None, expect=False):
@@ -297,6 +302,15 @@ def main():
                   and hit is not None, f"{code}, copy {hit}")
         check(f"{mode}: no temp files left", not list(IN.glob("upload_*")))
     printers["mk4"].host = good_host
+
+    # Klipper printers: only LAN clients without a key (Moonraker trusts LAN addresses by default)
+    for ip, want in [("127.0.0.1", True), ("192.168.1.40", True), ("10.1.2.3", True), ("172.20.0.5", True),
+                     ("fe80::1", True), ("::ffff:192.168.1.9", True), ("100.100.10.20", False), ("8.8.8.8", False),
+                     ("2001:db8::1", True), ("2a00:1450:4001::1", False), ("bogus", False)]:
+        check(f"LAN client {ip}: {want}", slicerhost.lan_client(ip) is want)
+    check("Moonraker: upload passes, G-code does not", slicerhost.allowed("moonraker", "POST", "/server/files/upload")
+          and not slicerhost.allowed("moonraker", "POST", "/printer/gcode/script")
+          and not slicerhost.allowed("moonraker", "GET", "/server/files/gcodes/x.gcode"))
 
     # printer switched off
     printers["mk4"].host = f"127.0.0.1:{free_port()}"

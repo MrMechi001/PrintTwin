@@ -13,7 +13,7 @@
 // bedOffset(x, y, z, out), setFans, setFilament, setHeat, setLcd, tick, nozzleWorld, bounds, floorZ }
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { makeCable, makeLcd, makeSpool, makeStrand, placeCyl, spoolTurnsFor } from './printer_common.js';
+import { makeCable, makeLcd, makeSpool, makeStrand, placeCyl, spoolDirection, spoolTurnsFor } from './printer_common.js';
 
 export async function buildPrinter(url, { recolor = {} } = {}) {
   const gltf = await new GLTFLoader().loadAsync(url);
@@ -201,7 +201,7 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
   const pose = { x: meta.pose?.x ?? 125, y: meta.pose?.y ?? 105, z: meta.pose?.z ?? 50 };
   const cs = new THREE.Vector3(), p1 = new THREE.Vector3(), p2 = new THREE.Vector3();
   const filFrom = new THREE.Vector3(), filTo = new THREE.Vector3(), shift = new THREE.Vector3();
-  let spoolTurns = 0;
+  let spoolTurns = 0, spoolDir = 0;
 
   function setPose(x, y, z) {
     pose.x = x; pose.y = y; pose.z = z;
@@ -255,7 +255,11 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
     },
     setHeat(c) { if (sock) sock.emissiveIntensity = Math.max(0, Math.min(1, ((c || 0) - 60) / 180)) * 0.9; },
     setLcd(s) { lcd?.update(s); },
-    tick() { if (spool) spool.rotation.x = spoolTurns * Math.PI * 2; },
+    tick() {
+      if (!spool) return;
+      spoolDir ||= strand ? spoolDirection(spool, filFrom, filTo, root) : 1;   // unwinds towards the extruder
+      spool.rotation.x = spoolDir * spoolTurns * Math.PI * 2;
+    },
     nozzleWorld: (out) => (corexy ? out.set(pose.x, pose.y, NOZZLE_Z) : out.set(pose.x, NOZZLE_Y, pose.z)),
     bounds: { min: lo, max: [hi[0], hi[1], Math.max(hi[2], sp ? sp.center[2] + sp.radius : hi[2])] },
     floorZ: lo[2] - 1.5,

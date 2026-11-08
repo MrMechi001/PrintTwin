@@ -10,6 +10,14 @@ api_key = "PRUSALINK-API-KEY"   # printer: Settings > Network > PrusaLink
 # model = "auto"                # 3D model in the Printer view: auto (detect), mk4, mk4s, mk39,
                                 # mk39s, coreone, coreonel, xl, mini, bedslinger, corexy
 
+# A Klipper printer (Voron & co.) through Moonraker - Mainsail / Fluidd address or host:7125:
+# [[printer]]
+# id = "voron"
+# name = "Voron 2.4"
+# kind = "moonraker"
+# host = "voron.local"
+# api_key = ""                  # only if Moonraker asks for one
+
 [server]
 listen_host = "0.0.0.0"         # 0.0.0.0 = reachable from other devices on the LAN/Tailscale
 port = 8790

@@ -118,4 +118,16 @@ export function makeStrand(filMat, radius = 0.875) {
 }
 
 // filament used for a path length: ~0.45 x 0.2 mm bead per mm of path, 1.75 mm filament
+// Which way a spool turns about its local X axis while filament is pulled off it: the rim where
+// the filament leaves (`from`) moves towards where the filament goes (`to`). Points in `root`
+// coordinates; +1 or -1 for rotation.x.
+const _m = new THREE.Matrix4(), _c = new THREE.Vector3(), _ax = new THREE.Vector3(), _d = new THREE.Vector3();
+export function spoolDirection(spool, from, to, root) {
+  root.updateWorldMatrix(true, true);
+  _m.copy(root.matrixWorld).invert().multiply(spool.matrixWorld);      // spool -> root
+  _c.setFromMatrixPosition(_m);
+  _ax.set(1, 0, 0).transformDirection(_m).cross(_d.subVectors(from, _c));   // rim velocity for +rotation
+  return _ax.dot(_d.subVectors(to, from)) < 0 ? -1 : 1;
+}
+
 export const spoolTurnsFor = (pathMm, windingRadius) => ((pathMm * 0.09) / 2.405) / (2 * Math.PI * windingRadius);

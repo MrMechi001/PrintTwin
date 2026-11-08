@@ -26,6 +26,8 @@ export const MODELS = {
   mini:  { label: 'Original Prusa MINI+', glb: 'models/mini.glb', fallback: 'bedslinger', volume: { bed: [180, 180], height: 180 } },
   bedslinger: { label: 'Generic bed-slinger', procedural: 'bedslinger', generic: true },
   corexy:     { label: 'Generic CoreXY', procedural: 'corexy', generic: true },
+  // flying gantry (bed fixed, the XY gantry moves in Z): Voron 2.4, Sovol SV08
+  corexy_gantry: { label: 'Generic CoreXY, flying gantry', procedural: 'corexy', options: { zMotion: 'gantry' }, generic: true },
 };
 
 // which models/*.glb the server has (one request, cached); if the server can't say
@@ -55,7 +57,7 @@ export async function loadPrinter(requested, { volume } = {}) {
       if (m.procedural) {
         const vol = volume || want?.volume || {};
         const mod = await import(m.procedural === 'corexy' ? './printer_corexy.js' : './printer3d.js');
-        const printer = mod.buildPrinter(m.procedural === 'corexy' ? vol : undefined);
+        const printer = mod.buildPrinter(m.procedural === 'corexy' ? { ...vol, ...(m.options || {}) } : undefined);
         return { printer, key, requested, label: want?.label || m.label, approx: true };
       }
     } catch (e) {
