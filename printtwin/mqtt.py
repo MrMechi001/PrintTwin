@@ -79,7 +79,11 @@ class MqttClient:
     def connect(self):
         raw = socket.create_connection((self.host, self.port), timeout=self.timeout)
         if self.tls and self.context is not None:
-            raw = self.context.wrap_socket(raw, server_hostname=self.server_name or self.host)
+            try:
+                raw = self.context.wrap_socket(raw, server_hostname=self.server_name or self.host)
+            except BaseException:                          # a refused certificate: close the socket too
+                raw.close()
+                raise
         elif self.tls:
             if self.verify or self.cafile:
                 ctx = ssl.create_default_context(cafile=self.cafile)

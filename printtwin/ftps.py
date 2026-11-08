@@ -10,8 +10,9 @@ Read-only: list files, their size and time, and download one. The quirks Bambu p
     fails - only where it is needed (A1 / A1 mini / A2L: allow_plain_data), never after a
     certificate error,
   - one session at a time, always QUIT; "421 too many connections" means: leave it alone a while.
-Without a CA file the control channel's certificate is pinned (tlsutil.pin) before the login,
-and every data channel must show the same certificate.
+With a CA file the chain and the printer's name (serial) are checked, without one the control
+channel's certificate is pinned (tlsutil.pin) before the login; every data channel must show the
+control channel's certificate.
 """
 from __future__ import annotations
 
@@ -32,11 +33,10 @@ class FtpsBusy(OSError):
 
 
 class _ImplicitFTPS(ftplib.FTP_TLS):
-    def __init__(self, ctx: ssl.SSLContext, server_name: str | None, timeout: float, pinned: bool = False):
+    def __init__(self, ctx: ssl.SSLContext, server_name: str | None, timeout: float):
         super().__init__(context=ctx, timeout=timeout)
         self.server_name = server_name
         self.reuse_session = True
-        self.pinned = pinned                  # unverified context: data channels must match the control channel
 
     def connect(self, host="", port=990, timeout=-999, source_address=None):
         self.host, self.port = host, port
@@ -54,7 +54,7 @@ class _ImplicitFTPS(ftplib.FTP_TLS):
         if self._prot_p:
             conn = self.context.wrap_socket(conn, server_hostname=self.server_name or self.host,
                                             session=self.sock.session if self.reuse_session else None)
-            if self.pinned and not tlsutil.same_peer(conn, self.sock):
+            if not tlsutil.same_peer(conn, self.sock):          # the data channel must be the same printer
                 conn.close()
                 raise tlsutil.PinMismatch("the FTPS data channel shows another certificate than the printer")
         return conn, size
@@ -80,14 +80,18 @@ class FtpsClient:
     # ------------------------------------------------------------------ session
     def open(self):
         pinned = not self.cafile and self.pin_file is not None
-        ftp = _ImplicitFTPS(tlsutil.context(self.cafile), self.server_name, self.timeout, pinned)
+        ftp = _ImplicitFTPS(tlsutil.context(self.cafile), self.server_name, self.timeout)
         try:
             ftp.connect(self.host, self.port)
+            if self.cafile and self.server_name:              # the chain is verified: is it this printer?
+                tlsutil.check_name(ftp.sock, self.server_name)
             if pinned:
                 tlsutil.pin(ftp.sock, self.pin_file, store=False)   # before the access code goes out
             ftp.login(self.user, self.password)
             if pinned:
                 tlsutil.pin(ftp.sock, self.pin_file)          # a first pin only once the login worked
+            elif self.pin_file is not None:
+                tlsutil.remember(ftp.sock, self.pin_file)     # verified: guards a later fallback to pinning
             ftp.prot_c() if self.prot_c else ftp.prot_p()
         except ftplib.error_temp as e:
             ftp.close()

@@ -22,7 +22,8 @@ Only status is read: PrintTwin sends just "pushall" and "get_version" - no print
 no Developer Mode needed (Bambu's own rules exempt status readers from the 2025 authorization).
 
 Config:  kind = "bambu", host = "192.168.1.40", serial = "01P00A...", access_code = "12345678",
-         optional cafile = Bambu's CA (else the printer's certificate is pinned on first contact),
+         optional cafile = a CA file of your own (default: Bambu's CAs in printtwin/certs/bambu.pem;
+         a printer whose chain they don't cover is pinned on first contact instead),
          ftps_plain_data = true/false (plain FTPS data channel allowed; default: A1 / A1 mini / A2L).
 """
 from __future__ import annotations
@@ -110,6 +111,10 @@ class BambuPrinter(BasePrinter):
         self.ftps_port = int(cfg.get("ftps_port", 990))
         ca = cfg.get("cafile") or (str(CERTS) if CERTS.is_file() else None)
         self.cafile = str(ca) if ca else None
+        # with the bundled CAs, a printer whose chain they don't know (a newer model) is pinned instead;
+        # a CA file from the config is meant: no way around it
+        self.ca_fallback = bool(self.cafile) and not cfg.get("cafile")
+        self._tls = {"mqtt": "ca" if self.cafile else "pin", "ftps": "ca" if self.cafile else "pin"}
         self.pin_dir = cache_dir / "tls"
         self.estimated = True
         mid = models.bambu_model_id(self.serial)
@@ -161,14 +166,23 @@ class BambuPrinter(BasePrinter):
         while True:
             client, up_at, got = None, None, False
             try:
+                ca = self.cafile if self._tls["mqtt"] == "ca" else None
                 client = MqttClient(self.http_netloc.split(":")[0], self.mqtt_port, "bblp", self.access_code,
                                     client_id=f"printtwin-{uuid.uuid4().hex[:8]}", keepalive=30,
-                                    context=tlsutil.context(self.cafile),
-                                    server_name=self.serial if self.cafile else None,
-                                    # a pinned certificate is checked before the access code is sent ...
-                                    on_tls=None if self.cafile else (lambda s: tlsutil.pin(s, pin_file, store=False)))
-                client.connect()
-                if not self.cafile:                # ... and a new one stored only once the printer took the code
+                                    context=tlsutil.context(ca), server_name=self.serial,
+                                    # the certificate is checked before the access code is sent: its name
+                                    # (CA-verified) or its fingerprint (pinned) ...
+                                    on_tls=(lambda s: self._name_ok(s, "MQTT")) if ca
+                                    else (lambda s: tlsutil.pin(s, pin_file, store=False)))
+                try:
+                    client.connect()
+                except ssl.SSLCertVerificationError as e:
+                    if self._fallback("mqtt", e):
+                        continue                   # at once, pinned (the finally below closes the client)
+                    raise
+                if ca:                             # ... and stored only once the printer took the code
+                    tlsutil.remember(client.sock, pin_file)
+                else:
                     tlsutil.pin(client.sock, pin_file)
                 topic = f"device/{self.serial}/report"
                 try:
@@ -226,6 +240,24 @@ class BambuPrinter(BasePrinter):
                 backoff, why_last = 1.0, None
             time.sleep(backoff)
             backoff = min(30.0, backoff * 2)
+
+    def _fallback(self, service: str, e: ssl.SSLCertVerificationError) -> bool:
+        """The bundled CAs don't cover this printer's certificate chain (a newer model?): check it by
+        its fingerprint instead - pinned on first contact, or the one a verified login noted before."""
+        if not self.ca_fallback or self._tls[service] != "ca":
+            return False
+        self._tls[service] = "pin"
+        log(self.id, f"{service.upper()}: the printer's certificate is not signed by a Bambu CA PrintTwin knows "
+                     f"({getattr(e, 'verify_message', None) or e}) - checking it by its fingerprint instead "
+                     f"(trust on first use). If this is a Bambu printer, please report its model.")
+        return True
+
+    def _name_ok(self, sock, service: str):
+        other = tlsutil.check_name(sock, self.serial)
+        if other and not getattr(self, f"_told_name_{service}", False):
+            setattr(self, f"_told_name_{service}", True)
+            log(self.id, f"{service}: the printer's certificate is Bambu's, named {other!r} (expected the serial "
+                         f"number {self.serial}) - accepted")
 
     def _on_report(self, payload: bytes):
         try:
@@ -664,11 +696,31 @@ class BambuPrinter(BasePrinter):
             if self.job is None and (self.loading or {}).get("phase") == "search":
                 self.loading = {"phase": "search", "message": msg}
 
-    def _ftps(self) -> FtpsClient:
+    def _ftps_client(self) -> FtpsClient:
         return FtpsClient(self.http_netloc.split(":")[0], self.access_code, port=self.ftps_port,
-                          cafile=self.cafile, server_name=self.serial if self.cafile else None,
+                          cafile=self.cafile if self._tls["ftps"] == "ca" else None, server_name=self.serial,
                           pin_file=self.pin_dir / f"{self.serial}-ftps.sha256",
                           allow_plain_data=self.plain_data, prot_c=self._prot_c, log=lambda m: log(self.id, m))
+
+    def _ftps(self):
+        """An FTPS session (with ...): CA-verified, or pinned once the bundled CAs turned out not to
+        cover this printer."""
+        printer = self
+
+        class Session:
+            def __enter__(self):
+                for _ in range(2):
+                    self.f = printer._ftps_client()
+                    try:
+                        return self.f.open()
+                    except ssl.SSLCertVerificationError as e:
+                        if not printer._fallback("ftps", e):
+                            raise
+                raise ConnectionError("FTPS: no TLS mode left")
+
+            def __exit__(self, *a):
+                self.f.close()
+        return Session()
 
     @staticmethod
     def _variants(t: str) -> tuple[str, str, str]:

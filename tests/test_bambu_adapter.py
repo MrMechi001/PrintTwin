@@ -505,6 +505,93 @@ def serial_upper():
 
 
 # ---------------------------------------------------------------- TLS pins, FTPS data channel, MQTT pace
+def free_ports(n):
+    out = []
+    for _ in range(n):
+        with socket.socket() as so:
+            so.bind(("127.0.0.1", 0))
+            out.append(so.getsockname()[1])
+    return out
+
+
+def bundled_cas():
+    ctx = ssl.create_default_context(cafile=str(B.CERTS))
+    names = sorted({dict(x[0] for x in c["subject"])["commonName"] for c in ctx.get_ca_certs()})
+    check("Bambu's CAs ship with PrintTwin (8 certificates, no keys)", len(ctx.get_ca_certs()) == 8
+          and "BBL CA" in names and "BBL CA2 RSA" in names and b"PRIVATE" not in B.CERTS.read_bytes(), str(names))
+
+
+def ca_and_fallback():
+    import sim_bambu as S
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "a").mkdir()
+        (d / "b").mkdir()
+        ca, dev, key = S.make_certs(d / "a", "01P00A000000001")      # "Bambu" (as far as this test goes)
+        _, dev2, key2 = S.make_certs(d / "b", "01P00A000000001")     # an impostor with its own CA, same name
+        good, evil = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER), ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        good.load_cert_chain(str(dev), str(key))
+        evil.load_cert_chain(str(dev2), str(key2))
+        idle = lambda: {"gcode_state": "IDLE", "total_layer_num": 0}   # noqa: E731
+        p_good, p_evil, f_good = free_ports(3)
+        S.MqttBroker(p_good, good, "01P00A000000001", "12345678", idle, "p1")
+        S.MqttBroker(p_evil, evil, "01P00A000000001", "12345678", idle, "p1")
+        root = d / "sd"
+        root.mkdir()
+        S.FtpsServer(f_good, good, root, "12345678")
+        cfg = {"id": "c", "host": "127.0.0.1", "serial": "01P00A000000001", "access_code": "12345678"}
+        tls = d / "cache" / "tls"
+
+        def start(port, cache=d / "cache", **kw):
+            p = B.BambuPrinter(dict(cfg, mqtt_port=port, ftps_port=f_good, **kw), cache, d / "in")
+            threading.Thread(target=p._mqtt_loop, daemon=True).start()
+            t0 = time.time()
+            while time.time() - t0 < 6 and not p._mqtt_ok:
+                time.sleep(0.1)
+            return p
+
+        real = B.CERTS
+        try:
+            B.CERTS = ca                                   # the bundled CAs know this printer
+            LOG.clear()
+            p = start(p_good)
+            with p._ftps() as f:
+                f.listing("/")
+            check("bundled CA: the printer is verified (MQTT and FTPS), no fallback", p._mqtt_ok
+                  and p._tls == {"mqtt": "ca", "ftps": "ca"} and not any("fingerprint instead" in m for m in LOG),
+                  str(p._tls))
+            check("... and its fingerprint is noted after the login", (tls / "01P00A000000001-mqtt.sha256").is_file()
+                  and (tls / "01P00A000000001-ftps.sha256").is_file())
+            LOG.clear()
+            p2 = start(p_evil)                            # later: someone else answers, with a chain nobody knows
+            check("after a verified login, an impostor is refused even though the CA check falls back to the pin",
+                  not p2._mqtt_ok and any("certificate changed" in m for m in LOG), [m for m in LOG if "MQTT" in m][:2])
+            (d / "c").mkdir()
+            ca3, dev3, key3 = S.make_certs(d / "c", "01P00A000000002")    # a genuine certificate - another printer's
+            other = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            other.load_cert_chain(str(dev3), str(key3))
+            (p_other,) = free_ports(1)
+            S.MqttBroker(p_other, other, "01P00A000000001", "12345678", idle, "p1")
+            B.CERTS = ca3
+            LOG.clear()
+            p5 = start(p_other, cache=d / "cache4")
+            check("verified, but the certificate names another serial number: refused, and said so", not p5._mqtt_ok
+                  and any("has the serial number 01P00A000000002" in m for m in LOG), [m for m in LOG if "MQTT" in m][:1])
+        finally:
+            B.CERTS = real
+        LOG.clear()
+        p3 = start(p_good, cache=d / "cache2")            # the real bundled CAs don't know the simulator's chain
+        with p3._ftps() as f:
+            f.listing("/")
+        check("bundled CAs, a chain they don't cover (a newer model): pinned instead, and said so",
+              p3._mqtt_ok and p3._tls == {"mqtt": "pin", "ftps": "pin"} and sum("fingerprint instead" in m for m in LOG) == 2,
+              str(p3._tls))
+        LOG.clear()
+        p4 = start(p_good, cache=d / "cache3", cafile=str(d / "b" / "ca.pem"))   # a CA from the config: no way around it
+        check("a CA file from the config: no fallback", not p4._mqtt_ok and p4._tls["mqtt"] == "ca"
+              and not any("fingerprint instead" in m for m in LOG))
+
+
 def pin_after_login():
     import sim_bambu as S
     with tempfile.TemporaryDirectory() as d:
@@ -638,7 +725,7 @@ def mqtt_pace():
 
 for t in (reprint, stale_total, late_handover, ambiguous_handover, wrong_file, rejected_stays, long_prepare,
           restart_mid_print, printing_file_first, collapsed_name, stale_prepare_percent, lost_finish, ftps_failure_shown,
-          tie_break, memo_other_print, pause_keeps_rejection, ambiguous_ftps_down, restart_later_slice,
+          tie_break, bundled_cas, memo_other_print, pause_keeps_rejection, ambiguous_ftps_down, restart_later_slice,
           x1_waits_for_running, old_sd_file, multi_plate, search_pace, names,
           paused_start, serial_upper, pins):
     t()
@@ -646,6 +733,7 @@ if shutil.which("openssl"):
     ftps_data_channel()
     mqtt_pace()
     pin_after_login()
+    ca_and_fallback()
 else:
     print("SKIP FTPS data channel and MQTT pace (no openssl tool)")
 print("\nall passed" if not failures else f"\n{failures} FAILED")

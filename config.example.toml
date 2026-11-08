@@ -26,7 +26,7 @@ api_key = "PRUSALINK-API-KEY"   # printer: Settings > Network > PrusaLink
 # host = "192.168.x.y"
 # serial = "01P00A..."
 # access_code = "12345678"
-# cafile = "..."                # Bambu's CA (optional: else the certificate is pinned on first contact)
+# cafile = "..."                # optional: a CA file of your own (Bambu's CAs come with PrintTwin)
 
 [server]
 listen_host = "0.0.0.0"         # 0.0.0.0 = reachable from other devices on the LAN/Tailscale

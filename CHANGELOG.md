@@ -10,6 +10,18 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
+## 0.7.1 – Bambu printers checked against Bambu's certificates
+
+* Bambu's CA certificates come with PrintTwin (`printtwin/certs/bambu.pem`, from ha-bambulab, MIT):
+  a Bambu printer's certificate is checked from the first connection on - signed by Bambu and made
+  out to the configured serial number - before the access code is sent. A printer reset with a new
+  certificate connects without deleting anything.
+* A newer model whose certificate chain the bundled CAs don't cover yet is checked by its
+  fingerprint instead (trust on first use) and the log says so. A printer that was verified once
+  is remembered, so this fallback can't be used to slip in another certificate later.
+* A certificate for another printer (wrong host or serial in the config) is refused with a clear
+  message.
+
 ## 0.7.0 – Bambu Lab printers (read-only)
 
 * **Bambu Lab printers** (read-only): `kind = "bambu"` with the serial number and the LAN access

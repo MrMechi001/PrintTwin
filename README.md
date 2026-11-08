@@ -130,9 +130,12 @@ storage* (print options) and insert a USB stick / SD card, or use the hand-over 
 says so when it can't find the file). An older file under the same name (an earlier version of the
 job) is not taken while this print's may still show up, and a file whose layer count doesn't match
 what the printer reports is dropped; printing the same job again starts over.
-On first contact PrintTwin remembers the printer's certificate and refuses a different one later,
-before it sends the access code (delete `cache/tls/<serial>-*.sha256` after replacing or resetting
-the printer).
+Before it sends the access code, PrintTwin checks the printer's certificate: signed by Bambu (Bambu's
+CA certificates come with PrintTwin, from [ha-bambulab](https://github.com/greghesp/ha-bambulab),
+MIT) and made out to your printer's serial number. A newer model whose certificate chain these
+don't cover yet is checked by its fingerprint instead - remembered on first contact, refused if
+it changes (the log says so; delete `cache/tls/<serial>-*.sha256` after replacing or resetting
+such a printer). With `cafile = "..."` in the printer's block you can use a CA file of your own.
 
 ### Optional: PrintTwin inside PrusaSlicer / OrcaSlicer
 
@@ -332,7 +335,7 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 **More printers** (see [Supported printers](#supported-printers))
 * An OctoPrint adapter next to PrusaLink, Moonraker (Klipper) and Bambu Lab.
 * Bambu Lab: a "PrintTwin for OrcaSlicer" plugin (a PrintTwin tab + the hand-over without a
-  script), Bambu's CA certificates bundled, the estimate calibrated on a real printer.
+  script), the estimate calibrated on a real printer.
 * True-to-size models for the *Printer* view: Bambu Lab printers next, then CORE One and
   CORE One L (MK4, MK4S and MINI+ are done, the XL is approximate) and the Voron 2.4 and Trident
   from the Voron CAD (GPL-3.0); generic bed-slinger / CoreXY / flying-gantry models for
