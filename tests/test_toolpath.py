@@ -4,16 +4,19 @@ usage: python -I tests/test_toolpath.py [job.bgcode]
 Default job: tests/fixtures/sample.bgcode (+ its plain .gcode twin), see tools/make_fixtures.py.
 """
 import ast
+import io
+import json
 import re
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from printtwin import bgcode  # noqa: E402
 from printtwin.config import ROOT  # noqa: E402
 from printtwin.metrics import parse_datagram  # noqa: E402
-from printtwin.toolpath import TYPE_ID, JobDecoder, load_file, parse_gcode  # noqa: E402
+from printtwin.toolpath import TYPE_ID, TYPES, JobDecoder, decode_bytes, load_file, parse_gcode  # noqa: E402
 from printtwin.tracker import Tracker  # noqa: E402
 import random  # noqa: E402
 
@@ -190,6 +193,57 @@ tr = Tracker(lt)
 tr.feed_sdpos(lt.line_off[3])
 check("never past the firmware's file position", tr.from_axis_z(lt.layer_z[-1], 50) == tr._sd_index() == 4,
       f"{tr.printed}")
+
+
+# 10) Bambu Studio G-code (comment style as in Bambu Studio's output) and .gcode.3mf jobs
+def bambu_gcode(layers, colour="#FF0000;#00AE42"):
+    out = ["; HEADER_BLOCK_START", "; BambuStudio 02.03.00.70", "; total layer number: %d" % layers,
+           "; HEADER_BLOCK_END", "", "; CONFIG_BLOCK_START", f"; filament_colour = {colour}",
+           "; filament_type = PLA;PETG", "; nozzle_diameter = 0.4",
+           "; printable_area = 0x0,256x0,256x256,0x256", "; printer_model = Bambu Lab X1 Carbon",
+           "; CONFIG_BLOCK_END", "", "M620 S255", "T255", "M621 S255", "T1000", "G90", "M83"]
+    for k in range(layers):
+        z = 0.2 * (k + 1)
+        out += ["; CHANGE_LAYER", f"; Z_HEIGHT: {z:.1f}", "; LAYER_HEIGHT: 0.2", f"G1 Z{z:.1f}",
+                "; FEATURE: Outer wall", "; LINE_WIDTH: 0.42", "G1 X100 Y100", "G1 X110 Y100 E0.5",
+                "; FEATURE: Sparse infill", "; LINE_WIDTH: 0.45", "G1 X110 Y110 E0.5"]
+        if k == 2:
+            out += ["M620 S1A", "T1", "M621 S1A", "; FEATURE: Support interface", "G1 X100 Y110 E0.4"]
+    return ("\n".join(out) + "\n").encode()
+
+
+bt = decode_bytes(bambu_gcode(5))
+check("Bambu G-code: layers from '; Z_HEIGHT:'", bt.layer_z == [0.2, 0.4, 0.6, 0.8, 1.0], str(bt.layer_z))
+check("Bambu G-code: feature types from '; FEATURE:'", [TYPES[t] for t in bt.type[:2]] == ["External perimeter", "Internal infill"],
+      str([TYPES[t] for t in bt.type[:2]]))
+check("Bambu G-code: 'Support interface' known", TYPES[bt.type[6]] == "Support material interface", TYPES[bt.type[6]])
+check("Bambu G-code: widths / heights from '; LINE_WIDTH:' / '; LAYER_HEIGHT:'",
+      abs(bt.wh[0] - 0.42) < 1e-6 and abs(bt.wh[2] - 0.45) < 1e-6 and abs(bt.wh[1] - 0.2) < 1e-6, str(list(bt.wh[:4])))
+check("Bambu G-code: T255 / T1000 are no tools, T1 is", bt.tool_changes == [(6, 1)], str(bt.tool_changes))
+inf = bt.info()
+check("Bambu G-code: settings at the start (colours, printer, bed from printable_area)",
+      inf["filament_colours"] == ["#FF0000", "#00AE42"] and bt.meta.get("printer_model") == "Bambu Lab X1 Carbon"
+      and bt.meta.get("bed_shape") == "0x0,256x0,256x256,0x256", f"{inf['filament_colours']} {bt.meta.get('bed_shape')}")
+
+zbuf = io.BytesIO()
+with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("3D/3dmodel.model", "<model/>")
+    z.writestr("Metadata/plate_1.gcode", bambu_gcode(3, "#112233"))
+    z.writestr("Metadata/plate_2.gcode", bambu_gcode(6, "#445566"))
+    z.writestr("Metadata/project_settings.config", json.dumps({
+        "printer_model": "Bambu Lab P1S", "filament_colour": ["#ABCDEF"], "printable_area": ["0x0", "256x0", "256x256", "0x256"]}))
+three = zbuf.getvalue()
+t1 = decode_bytes(three)
+check(".gcode.3mf: plate 1 by default", t1.meta.get("plate") == 1 and len(t1.layer_z) == 3 and t1.meta["format"] == "3mf",
+      f"plate {t1.meta.get('plate')}, {len(t1.layer_z)} layers")
+check(".gcode.3mf: the project's settings count (printer, colours)", t1.meta.get("printer_model") == "Bambu Lab P1S"
+      and t1.info()["filament_colour"] == "#ABCDEF", f"{t1.meta.get('printer_model')} {t1.info()['filament_colour']}")
+d2 = JobDecoder(plate=2)
+for k in range(0, len(three), 1000):            # arrives in pieces, like a download
+    d2.feed(three[k:k + 1000])
+t2 = d2.finish()
+check(".gcode.3mf: plate 2 when asked, fed in pieces", t2.meta.get("plate") == 2 and len(t2.layer_z) == 6,
+      f"plate {t2.meta.get('plate')}, {len(t2.layer_z)} layers")
 
 print("\nall passed" if not failures else f"\n{failures} FAILED")
 sys.exit(1 if failures else 0)

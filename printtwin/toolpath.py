@@ -7,8 +7,9 @@ counts the same stream, so offsets map 1:1 onto live progress).
 Binary layout served to the viewer (little endian, N segments):
   f32[3N] start | f32[3N] end | f32[2N] width,height | u8[N] type | pad to 4
 
-Understands PrusaSlicer, OrcaSlicer/Bambu Studio, SuperSlicer and Cura
-comments; falls back to Z changes when a file has no layer markers.
+Understands PrusaSlicer, OrcaSlicer, Bambu Studio ("; FEATURE:", "; Z_HEIGHT:"), SuperSlicer
+and Cura comments; falls back to Z changes when a file has no layer markers. Bambu jobs
+(.gcode.3mf / .3mf, a zip) are unpacked: the plate's G-code plus its colours and printer.
 
 Parsing is incremental: `JobDecoder.feed()` takes the job file in arbitrary
 chunks (e.g. straight from a slow download) and the toolpath grows as data
@@ -16,9 +17,12 @@ arrives; `load_file()` is the same decoder fed in one go.
 """
 from __future__ import annotations
 
+import io
+import json
 import math
 import re
 import struct
+import zipfile
 from array import array
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +44,7 @@ _ALIASES = {
     "bridge": "Bridge infill", "internal bridge": "Bridge infill", "gap infill": "Gap fill",
     "skirt": "Skirt/Brim", "brim": "Skirt/Brim", "support": "Support material",
     "support transition": "Support material", "prime tower": "Wipe tower",
+    "support interface": "Support material interface", "floating vertical shell": "Perimeter",
     # SuperSlicer
     "internal perimeter": "Perimeter", "thin wall": "Gap fill", "internal bridge infill": "Bridge infill",
     # Cura
@@ -53,7 +58,9 @@ TYPE_LOOKUP.update({k: TYPE_ID[v] for k, v in _ALIASES.items()})
 ARC_STEP_MM = 0.4          # chord length used to flatten G2/G3 arcs
 MIN_LAYER_STEP = 0.05      # Z rise that starts a new layer when a file has no markers
 META_KEYS = ("filament_colour", "bed_shape", "printer_model", "filament_type", "layer_height", "nozzle_diameter")
-ASCII_TAIL = 300_000       # plain .gcode keeps its settings block at the end
+META_ALIASES = {"printable_area": "bed_shape"}   # Bambu Studio / OrcaSlicer name for the bed outline
+ASCII_TAIL = 300_000       # PrusaSlicer keeps its settings block at the end of plain .gcode, Bambu at the start
+MAX_TOOL = 63              # T255 / T1000 in Bambu start G-code are no real tools
 
 _WORD = re.compile(rb"([A-Z])(-?\d*\.?\d+)")
 _GNUM = re.compile(rb"G(\d+)")
@@ -223,7 +230,29 @@ class GcodeParser:
                     continue
                 c = raw[0]
             if c == 59:  # ';'
-                if raw.startswith(b";TYPE:"):
+                if raw.startswith(b"; ") and len(raw) > 9:    # Bambu Studio: "; FEATURE: Outer wall" ...
+                    if raw.startswith(b"; FEATURE:"):
+                        cur_type = _type_id(raw[10:])
+                    elif raw.startswith(b"; LINE_WIDTH:"):
+                        try:
+                            width = float(raw[13:])
+                        except ValueError:
+                            pass
+                    elif raw.startswith(b"; LAYER_HEIGHT:"):
+                        try:
+                            height = float(raw[15:])
+                            saw_height = True
+                        except ValueError:
+                            pass
+                    elif raw.startswith(b"; Z_HEIGHT:"):
+                        try:
+                            zl = float(raw[11:])
+                            if not (tp.layer_z and tp.layer_start[-1] == len(ty) and abs(tp.layer_z[-1] - zl) < 1e-6):
+                                tp.layer_z.append(zl)
+                                tp.layer_start.append(len(ty))
+                        except ValueError:
+                            pass
+                elif raw.startswith(b";TYPE:"):
                     cur_type = _type_id(raw[6:])
                 elif raw.startswith(b";WIDTH:"):
                     try:
@@ -238,8 +267,10 @@ class GcodeParser:
                         pass
                 elif raw.startswith(b";Z:"):
                     try:
-                        tp.layer_z.append(float(raw[3:]))
-                        tp.layer_start.append(len(ty))
+                        zl = float(raw[3:])
+                        if not (tp.layer_z and tp.layer_start[-1] == len(ty) and abs(tp.layer_z[-1] - zl) < 1e-6):
+                            tp.layer_z.append(zl)
+                            tp.layer_start.append(len(ty))
                     except ValueError:
                         pass
                 continue
@@ -304,7 +335,7 @@ class GcodeParser:
                 while j < len(raw) and 48 <= raw[j] <= 57:
                     j += 1
                 tool = int(raw[1:j])
-                if tool != s.get("tool", -1):
+                if tool <= MAX_TOOL and tool != s.get("tool", -1):
                     s["tool"] = tool
                     tp.tool_changes.append((len(ty), tool))
 
@@ -350,15 +381,19 @@ def _nozzle_width(meta: dict) -> float:
 
 
 class JobDecoder:
-    """Job file bytes (.bgcode or plain .gcode, any chunk sizes) -> growing Toolpath.
+    """Job file bytes (.bgcode, plain .gcode or a Bambu .gcode.3mf, any chunk sizes) -> growing Toolpath.
 
     `tp` is valid from the first byte on and only ever grows until finish();
-    other threads may read it meanwhile (arrays are append-only).
+    other threads may read it meanwhile (arrays are append-only). A .3mf is a zip whose
+    directory sits at the end: it is parsed once complete. `plate`: which plate's G-code
+    (Metadata/plate_<n>.gcode) - None = the only one there is, else plate 1.
     """
 
-    def __init__(self):
+    def __init__(self, plate: int | None = None):
         self.tp = Toolpath()
-        self.fmt: str | None = None          # "bgcode" | "gcode"
+        self.plate = plate
+        self.fmt: str | None = None          # "bgcode" | "gcode" | "3mf"
+        self._headtext = b""                 # gcode: first ASCII_TAIL bytes (Bambu writes its settings there)
         self.bytes_in = 0
         self._buf = bytearray()              # bgcode: unparsed bytes; gcode: rolling tail
         self._head = b""
@@ -379,6 +414,8 @@ class JobDecoder:
                 self.fmt = "bgcode"
                 _, self._cks = struct.unpack_from("<IH", data, 4)
                 data = data[10:]
+            elif data[:4] == b"PK\x03\x04":
+                self.fmt = "3mf"
             else:
                 self.fmt = "gcode"
                 self._parser = GcodeParser(tp=self.tp)
@@ -386,7 +423,11 @@ class JobDecoder:
         if self.fmt == "bgcode":
             self._buf += data
             self._blocks()
+        elif self.fmt == "3mf":
+            self._buf += data                      # whole zip: parsed in finish()
         else:
+            if len(self._headtext) < ASCII_TAIL:
+                self._headtext += data[:ASCII_TAIL - len(self._headtext)]
             self._parser.feed(data)
             self._buf += data
             if len(self._buf) > 2 * ASCII_TAIL:
@@ -406,19 +447,45 @@ class JobDecoder:
                 raise ValueError(f"truncated bgcode: {len(self._buf)} bytes after the last block")
             if self._parser is None:               # no G-code blocks at all
                 self._parser = GcodeParser(_nozzle_width(meta), tp=tp)
+        elif self.fmt == "3mf":
+            gcode = self._unzip(bytes(self._buf))
+            self._buf = bytearray()
+            self._parser = GcodeParser(_nozzle_width(meta), tp=tp)
+            self._parser.feed(gcode)
+            _scan_meta(meta, gcode[:ASCII_TAIL] + b"\n" + gcode[-ASCII_TAIL:])
         else:
-            tail = bytes(self._buf[-ASCII_TAIL:])
-            for k in META_KEYS:
-                if k == "layer_height":
-                    continue
-                m = re.search(rb"^; " + k.encode() + rb" = (.*?)\r?$", tail, re.M)
-                if m:
-                    meta[k] = m.group(1).decode("utf-8", "replace").strip()
+            _scan_meta(meta, self._headtext + b"\n" + bytes(self._buf[-ASCII_TAIL:]))
             self._buf = bytearray()
         self._parser.finish()
         if "filament_colour" in meta:
             meta.update(_filaments(meta))
         return tp
+
+    # ------------------------------------------------------------------ Bambu .gcode.3mf
+    def _unzip(self, data: bytes) -> bytes:
+        """The plate's G-code; colours, filament types and the printer from the project's settings."""
+        meta = self.tp.meta
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            names = z.namelist()
+            plates = sorted((n for n in names if re.fullmatch(r"Metadata/plate_\d+\.gcode", n)),
+                            key=lambda n: int(re.search(r"\d+", n.rsplit("/", 1)[1]).group()))
+            if not plates:
+                raise ValueError("3mf without G-code (sliced project expected: Metadata/plate_<n>.gcode)")
+            want = f"Metadata/plate_{self.plate}.gcode" if self.plate else None
+            name = want if want in plates else plates[0]
+            meta["plate"] = int(re.search(r"(\d+)\.gcode$", name).group(1))
+            if "Metadata/project_settings.config" in names:
+                try:
+                    ps = json.loads(z.read("Metadata/project_settings.config"))
+                except ValueError:
+                    ps = {}
+                for k in ("printer_model", "filament_colour", "filament_type", "nozzle_diameter", "printable_area"):
+                    v = ps.get(k)
+                    if v:
+                        meta.setdefault(META_ALIASES.get(k, k), ";".join(map(str, v)) if isinstance(v, list) else str(v))
+                if isinstance(ps.get("printable_area"), list):
+                    meta["bed_shape"] = ",".join(ps["printable_area"])
+            return z.read(name)
 
     # ------------------------------------------------------------------ bgcode blocks
     def _blocks(self):
@@ -457,6 +524,19 @@ class JobDecoder:
             for k in META_KEYS:
                 if k in kv and k not in meta:
                     meta[k] = kv[k]
+
+
+def _scan_meta(meta: dict, text: bytes):
+    """'; key = value' settings lines (PrusaSlicer at the end, Bambu Studio at the start)."""
+    for k in META_KEYS + tuple(META_ALIASES):
+        if k == "layer_height":
+            continue
+        key = META_ALIASES.get(k, k)
+        if key in meta:
+            continue
+        m = re.search(rb"^; " + k.encode() + rb" = (.*?)\r?$", text, re.M)
+        if m:
+            meta[key] = m.group(1).decode("utf-8", "replace").strip()
 
 
 def decode_bytes(buf: bytes) -> Toolpath:

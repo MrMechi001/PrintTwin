@@ -56,6 +56,10 @@ for s, want in [("V2_350", "corexy_gantry"), ("V2_250", "corexy_gantry"), ("Voro
                 ("Elegoo Neptune 4 Pro", "bedslinger"), ("Anycubic Kobra 3", "bedslinger"),
                 ("Anycubic Kobra S1", "corexy"), ("XL5IS", "xl")]:
     check(f"slicer {s!r}", models.from_slicer(s), want)
+for s, want in [("Bambu Lab X1 Carbon", "corexy"), ("Bambu Lab X1E", "corexy"), ("Bambu Lab P1S", "corexy"),
+                ("Bambu Lab P1P", "corexy"), ("Bambu Lab H2D", "corexy"), ("Bambu Lab A1", "bedslinger"),
+                ("Bambu Lab A1 mini", "bedslinger")]:
+    check(f"slicer {s!r}", models.from_slicer(s), want)
 for t, want in [("klipper/corexy", "corexy"), ("klipper/corexy+qgl", "corexy_gantry"), ("klipper/cartesian", "bedslinger"),
                 ("klipper/corexz", "bedslinger"), ("klipper/delta", None), ("1.4.0", None)]:
     check(f"klipper {t}", models.from_klipper(t), want)

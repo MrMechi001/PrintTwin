@@ -28,3 +28,5 @@ jobs:
         run: python -I tests/test_slicerhost.py
       - name: Klipper / Moonraker end-to-end (simulated printer)
         run: python -I tests/test_moonraker.py
+      - name: MQTT client (for Bambu Lab printers)
+        run: python -I tests/test_mqtt.py
