@@ -503,6 +503,7 @@ TYPE_RETRY_S = 30.0        # PrusaLink on a Pi that doesn't know its printer yet
 NOID_CHECK_S = 10.0        # a job without id: compare its file this often
 EST_TICK_S = 0.5           # the estimate moves on between the 2 s status polls
 EST_Z_SAMPLES = 3          # Z must hold for this many polls before the layers below count as done
+EST_VOTE_LEAD = 2          # normal <-> stealth marks: the other side needs this many votes more
 PI_Z_TOL = 0.011           # PrusaLink on a Pi reports the G-code's own Z (two decimals, no bed mesh)
 
 
@@ -547,6 +548,7 @@ class _Estimate:
         self.run = 0.0
         self.t = time.time()
         self.votes = {"P": 0, "Q": 0}             # which marks the percent follows: normal (P) or stealth (Q)
+        self.use = "P"                             # ... and the side in use (changes on a clear lead only)
         self.vote = False                          # a new Z sample to vote with
 
     def advance(self, now: float):
@@ -738,10 +740,15 @@ class PrusaLinkPrinter(BasePrinter):
         # Z: the layers below the lowest Z of the last polls are done (a z-hop or a travel isn't a
         # layer, and the planned Z runs ahead of the nozzle); the layer of the latest Z isn't passed.
         # Not at 0 %: the start G-code (probing, purge line) moves through the first layers' heights.
+        # The lower bound (and the vote below) only with all EST_Z_SAMPLES polls in: a single report
+        # may be a z-hop, which on a Pi can look like a higher layer (a hop of a layer multiple).
         lo_z, hi_z = 0, n
+        full = len(est.z) == est.z.maxlen
         if lz and est.z and pct is not None and pct > 0:
             top = lz[-1] + Z_TOL
-            if self.pi:                               # exact G-code Z: anything else is a hop or a travel
+            if not full:
+                pass
+            elif self.pi:                             # exact G-code Z: anything else is a hop or a travel
                 zs = [z for z in est.z if z <= top and abs(lz[_nearest(lz, z)] - z) <= PI_Z_TOL]
                 if zs:
                     lo_z = ls[_nearest(lz, min(zs))]
@@ -762,12 +769,17 @@ class PrusaLinkPrinter(BasePrinter):
             for k, marks in (("P", tp.progress_marks), ("Q", tp.silent_marks)):
                 if marks:
                     wins[k] = _window(marks, pct, n)
-        if est.vote and len(wins) == 2 and (lo_z > 0 or hi_z < n):
+        if est.vote and full and len(wins) == 2 and (lo_z > 0 or hi_z < n):
             fits = {k: lo < hi_z and hi > lo_z for k, (lo, hi) in wins.items()}
             if fits["P"] != fits["Q"]:
                 est.votes["P" if fits["P"] else "Q"] += 1
         est.vote = False
-        use = "Q" if "Q" in wins and (est.votes["Q"] > est.votes["P"] or "P" not in wins) else "P"
+        lead = est.votes["Q"] - est.votes["P"]
+        if lead >= EST_VOTE_LEAD:
+            est.use = "Q"
+        elif -lead >= EST_VOTE_LEAD:
+            est.use = "P"
+        use = est.use if est.use in wins else next(iter(wins), "P")
         p = float(lo_z)
         if use in wins:
             lo, hi = wins[use]
