@@ -78,6 +78,19 @@ if mk4.exists():
     g = gltf_json(mk4.read_bytes())
     check("mk4: orange Z parts", material_of(g, "z-top-left") == "orange")
     check("mk4: no MK4S parts", "fan-case" not in {n.get("name") for n in g["nodes"]})
+mk3s = MODELS / "mk3s.glb"
+if mk3s.exists():
+    g = gltf_json(mk3s.read_bytes())
+    meta = g["extras"]["printtwin"]
+    names = {n.get("name") for n in g["nodes"]}
+    check("mk3s: model + 20x4 LCD", meta.get("model") == "mk3s" and meta.get("lcd_style") == "char20x4")
+    check("mk3s: flat frame, MK3S+ parts, hardware", {"frame", "y-carriage", "extruder-body", "x-end-motor",
+                                                      "z-top-left", "einsy-base", "psu", "superpinda", "sheet"} <= names,
+          str(sorted({"frame", "y-carriage", "extruder-body", "x-end-motor", "z-top-left", "einsy-base", "psu",
+                      "superpinda", "sheet"} - names)))
+    check("mk3s: black extruder, orange covers", material_of(g, "extruder-body") == "petg"
+          and material_of(g, "extruder-cover") == "orange")
+    check("mk3s: cable handles", len(meta.get("cable_handles", [])) == 2 and meta.get("cable_radius", 0) > 0)
 
 print("\nall passed" if not failures else f"\n{failures} FAILED")
 sys.exit(1 if failures else 0)

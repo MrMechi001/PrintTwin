@@ -27,6 +27,27 @@ Built by `tools/cad/build_mk4.py` (`mk4` / `mk4s`) from:
 The source of the models is those STEP files plus the build script: download the
 Printables models into `cad_src/` (see the script's header) and run it.
 
+## mk3s.glb
+
+`mk3s.glb` (and `mk3s.glb.gz`) is a derivative work, licensed **GNU GPL v2.0** (full text:
+`LICENSE-GPL-2.0.txt` next to this file). Built by `tools/cad/build_mk3s.py` from:
+
+* **Prusa Research, "Original-Prusa-i3"** (MK3S branch) – https://github.com/prusa3d/Original-Prusa-i3 –
+  GPL-2.0: printed parts (STEP/STL) and the frame, Y-plate and Y-carriage drawings (DXF).
+* **Prusa Research, "Original Prusa i3 MK3S+ printable parts"** – https://www.printables.com/model/57217 –
+  GPL-2.0: the MK3S+ revisions (Z tops, Einsy base, LCD supports, ...).
+* **FokieH, "Prusa MK4 Model"** – https://www.printables.com/model/961911 – GPL-2.0: the Y
+  extrusions and smooth rods (the same as the MK3S+'s).
+* **Jonathan Kayne, "Prusa i3 MK3S (SolidWorks with STEP)"** –
+  https://grabcad.com/library/prusa-i3-mk3s-solidworks-with-step-1 – used only as a measuring
+  reference (where each Prusa part sits, hardware sizes); none of its geometry is in the model.
+* PrintTwin (`tools/cad/build_mk3s.py`, `tools/cad/mk3s_hw/`, GPL-2.0): motors, pulleys, belts,
+  idlers, LM8UU bearings, Z nuts, hotend, SuperPINDA, fans, Einsy board, PSU, LCD board, MK52
+  heatbed, steel sheet, spacers, rods, leadscrews, LCD knob.
+
+Source: unzip Prusa's repository into `cad_src/prusa_mk3s/` and the Printables parts into
+`cad_src/prusa_mk3s_printables/`, then run the script.
+
 ## mini.glb
 
 `mini.glb` (and `mini.glb.gz`) is a derivative work, licensed **GNU GPL v3.0** (full text:
