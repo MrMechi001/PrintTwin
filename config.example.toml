@@ -4,11 +4,16 @@
 [[printer]]
 id = "mk4"                      # short id, used in URLs: /?p=mk4
 name = "Prusa MK4"
-kind = "prusalink"              # Prusa MK4/MK4S/MK3.9/Core One/XL/MINI with PrusaLink
-host = "192.168.x.y"            # printer IP (also used to match its UDP metrics)
-api_key = "PRUSALINK-API-KEY"   # printer: Settings > Network > PrusaLink
+kind = "prusalink"              # Prusa MK4/MK4S/MK3.9/Core One/XL/MINI with PrusaLink, MK3/MK3S/MK3S+
+                                # with PrusaLink on a Raspberry Pi
+host = "192.168.x.y"            # printer IP (also used to match its UDP metrics); MK3: the Pi's
+                                # address, e.g. "192.168.x.y:8080" or "prusalink.local:8080"
+api_key = "PRUSALINK-API-KEY"   # printer: Settings > Network > PrusaLink (MK3: PrusaLink's web page,
+                                # Settings > API key)
+# user = "..."                  # MK3 with PrusaLink on a Pi and no API key: the user name and
+# password = "..."              # password from PrusaLink's setup (HTTP digest login)
 # model = "auto"                # 3D model in the Printer view: auto (detect), mk4, mk4s, mk39,
-                                # mk39s, coreone, coreonel, xl, mini, bedslinger, corexy
+                                # mk39s, coreone, coreonel, xl, mini, mk3s, mk3, bedslinger, corexy
 
 # A Klipper printer (Voron & co.) through Moonraker - Mainsail / Fluidd address or host:7125:
 # [[printer]]

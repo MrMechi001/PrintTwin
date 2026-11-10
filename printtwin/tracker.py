@@ -9,6 +9,8 @@ Inputs, best first:
      segment under the nozzle is searched in a small window before sdpos.
   2. sdpos only: assume a fixed planner lag.
   3. PrusaLink axis_z only: everything below the current layer is done.
+  4. no position at all (Bambu Lab, PrusaLink on a Raspberry Pi): estimated between the slicer's
+     progress marks (estimate / advance_to).
 """
 from __future__ import annotations
 
@@ -143,12 +145,17 @@ class Tracker:
             if after:
                 hi = min(hi, after[0])
         hi = max(hi, lo)
-        p = lo + max(0.0, min(0.999, frac)) * (hi - lo)
-        if p > self.printed:
-            self.printed = p
+        return self.advance_to(lo + max(0.0, min(0.999, frac)) * (hi - lo))
+
+    def advance_to(self, p: float) -> float:
+        """An estimated place in the toolpath (segment units): only ever forward; the nozzle is put
+        on the toolpath there."""
+        n = self.tp.count
+        if n and p > self.printed:
+            self.printed = p = min(p, float(n))
             k = min(int(p), n - 1)
-            u = p - k
-            st, en, b = tp.start, tp.end, 3 * k
+            u = min(1.0, p - k)
+            st, en, b = self.tp.start, self.tp.end, 3 * k
             self.nozzle = (st[b] + (en[b] - st[b]) * u, st[b + 1] + (en[b + 1] - st[b + 1]) * u,
                            st[b + 2] + (en[b + 2] - st[b + 2]) * u)
         return self.printed

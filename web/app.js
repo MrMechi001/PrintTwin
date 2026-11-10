@@ -623,7 +623,7 @@ function onState(s) {
   chip.textContent = st;
   chip.className = `chip ${st}`;
   $('pname').textContent = s.name;
-  const file = s.job?.name || (s.online ? 'No job' : 'Printer not reachable');
+  const file = s.job?.name || (s.online ? 'No job' : (s.note || 'Printer not reachable'));
   $('file').textContent = file;
   $('file').title = file;
   const active = s.state === 'PRINTING' || s.state === 'PAUSED';
@@ -642,8 +642,8 @@ function onState(s) {
     dot.className = 'dot partial';
     $('livetxt').textContent = `Live, but file position off (${Math.round(m.sync.ok * 100)} % in sync)${fmt}`;
   } else if (m.estimated && active) {
-    dot.className = 'dot partial';               // Bambu: the printer reports layer and percent, no position
-    $('livetxt').textContent = `Estimated position (printer reports layer and %)${fmt}`;
+    dot.className = 'dot partial';               // Bambu, MK3: the printer reports layer / Z and percent, no position
+    $('livetxt').textContent = `Estimated position (${m.hint || 'printer reports layer and %'})${fmt}`;
   } else if (m.pos_age != null && m.pos_age < 3) {
     dot.className = 'dot on';
     $('livetxt').textContent = `Live nozzle position · ${Math.round(m.pos_rate)} Hz${fmt}`;

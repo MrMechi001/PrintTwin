@@ -24,6 +24,8 @@ jobs:
         run: python -I tests/test_glb_models.py
       - name: Bridge end-to-end (simulated printer)
         run: python -I tests/test_bridge.py
+      - name: MK3 / MK3S+ with PrusaLink on a Raspberry Pi (simulated) + MK4 live metrics
+        run: python -I tests/test_mk3.py
       - name: Slicer print host
         run: python -I tests/test_slicerhost.py
       - name: Klipper / Moonraker end-to-end (simulated printer)

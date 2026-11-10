@@ -24,6 +24,12 @@ export const MODELS = {
   // XL: Prusa's printed parts, frame estimated (no published XL assembly yet) -> marked approximate
   xl:    { label: 'Original Prusa XL', glb: 'models/xl.glb', approx: true, fallback: 'corexy', volume: { bed: [360, 360], height: 360 } },
   mini:  { label: 'Original Prusa MINI+', glb: 'models/mini.glb', fallback: 'bedslinger', volume: { bed: [180, 180], height: 180 } },
+  // MK3S / MK3S+: one model (same type code 1.3.1, firmware and slicer profile). The MK3 (older
+  // extruder, optical filament sensor) is shown as the MK3S+, marked approximate. While
+  // models/mk3s.glb isn't there (/api/models doesn't list it, or it answers 404) the generic
+  // bed-slinger stands in.
+  mk3s:  { label: 'Original Prusa i3 MK3S/MK3S+', glb: 'models/mk3s.glb', fallback: 'bedslinger' },
+  mk3:   { label: 'Original Prusa i3 MK3', glb: 'models/mk3s.glb', approx: true, fallback: 'bedslinger' },
   bedslinger: { label: 'Generic bed-slinger', procedural: 'bedslinger', generic: true },
   corexy:     { label: 'Generic CoreXY', procedural: 'corexy', generic: true },
   // flying gantry (bed fixed, the XY gantry moves in Z): Voron 2.4, Sovol SV08

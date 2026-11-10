@@ -49,6 +49,8 @@ Created {path}
 Open it in a text editor and fill in your printer:
   host    = the printer's IP address   (printer: Settings > Network)
   api_key = its PrusaLink API key      (printer: Settings > Network > PrusaLink)
+            MK3 / MK3S / MK3S+ with PrusaLink on a Raspberry Pi: the API key from PrusaLink's web page
+            (Settings), or user + password from its setup
 For the live nozzle position also turn on the printer's metrics (README: "Turn on the printer's metrics").
 Then start PrintTwin again.
 """)
@@ -68,15 +70,16 @@ def main(argv=None):
         kind = pc.get("kind", "prusalink")
         if str(pc.get("host", "")).strip() in PLACEHOLDERS:
             return True
-        if kind == "prusalink":
-            return str(pc.get("api_key", "")).strip() in PLACEHOLDERS
+        if kind == "prusalink":                 # the API key - or user + password (PrusaLink on a Raspberry Pi)
+            login = all(str(pc.get(k, "")).strip() not in PLACEHOLDERS | {"..."} for k in ("user", "password"))
+            return str(pc.get("api_key", "")).strip() in PLACEHOLDERS and not login
         if kind == "bambu":                     # the serial number and the LAN access code (printer screen)
             return any(str(pc.get(k, "")).strip() in PLACEHOLDERS for k in ("serial", "access_code"))
         return False
     pending = [pc.get("id", "?") for pc in cfg.get("printer", []) if _incomplete(pc)]
     if pending or not cfg.get("printer"):
-        print(f"Please enter your printer's IP address and its PrusaLink API key (Bambu Lab: serial number and "
-              f"LAN access code) in {args.config or config.DEFAULT_CONFIG} "
+        print(f"Please enter your printer's IP address and its PrusaLink API key (or PrusaLink's user and "
+              f"password; Bambu Lab: serial number and LAN access code) in {args.config or config.DEFAULT_CONFIG} "
               f"(printer {', '.join(pending) or '- none configured -'}).")
         sys.exit(1)
     cache = Path(cfg.get("cache_dir") or ROOT / "cache")

@@ -1,13 +1,15 @@
 """Which printer model to show: map what the printer / the job says onto a model key.
 
-Model keys (see web/printers.js): mk4, mk4s, mk39, mk39s, coreone, coreonel, xl, mini,
-plus the generic fallbacks bedslinger, corexy (bed moves in Z) and corexy_gantry (bed fixed,
-the gantry moves in Z: Voron 2.4, Sovol SV08).
+Model keys (see web/printers.js): mk4, mk4s, mk39, mk39s, coreone, coreonel, xl, mini, mk3s
+(MK3S / MK3S+), mk3, plus the generic fallbacks bedslinger, corexy (bed moves in Z) and
+corexy_gantry (bed fixed, the gantry moves in Z: Voron 2.4, Sovol SV08).
 
 Sources, most reliable first:
   1. config:   model = "coreone"            (per [[printer]] block; "auto" = detect)
   2. the printer itself: PrusaLink GET /api/version -> "printer" type code (an MK4 reports
-     "1.4.0") - the hardware, even if a job was sliced for a sibling model
+     "1.4.0") - the hardware, even if a job was sliced for a sibling model. PrusaLink on a
+     Raspberry Pi (MK3 family) has no "printer" key, only "original": "PrusaLink I3MK3S"
+     (type_from_original turns that into the same code, "1.3.1")
   3. the job:  printer_model in the G-code / bgcode metadata, written by the slicer
                (PrusaSlicer: MK4IS, MK4S, COREONE, XL, MINIIS, V2_350, ...; OrcaSlicer:
                "Voron 2.4 350", "Creality K1 Max", ...)
@@ -18,8 +20,8 @@ from __future__ import annotations
 
 import re
 
-MODEL_KEYS = ("mk4", "mk4s", "mk39", "mk39s", "coreone", "coreonel", "xl", "mini", "bedslinger", "corexy",
-              "corexy_gantry")
+MODEL_KEYS = ("mk4", "mk4s", "mk39", "mk39s", "coreone", "coreonel", "xl", "mini", "mk3s", "mk3", "bedslinger",
+              "corexy", "corexy_gantry")
 
 # PrusaLink /api/version "printer" -> model key. Buddy firmware formats
 # PrinterModelInfo::current().version as "type.version.subversion"
@@ -33,6 +35,10 @@ PRUSALINK_TYPES = {
     "1.3.10": "mk39s",
     "1.3.5": "bedslinger",      # MK3.5  (MK3S+ frame and extruder, new electronics)
     "1.3.6": "bedslinger",      # MK3.5S
+    "1.3.1": "mk3s",            # MK3S / MK3S+ (PrusaLink on a Raspberry Pi, see type_from_original)
+    "1.3.0": "mk3",             # MK3
+    "1.2.6": "bedslinger",      # MK2.5S
+    "1.2.5": "bedslinger",      # MK2.5
     "2.1.0": "mini",            # MINI / MINI+
     "3.1.0": "xl",              # XL, any number of tools
     "3.1.1": "xl",              # XL+
@@ -42,6 +48,14 @@ PRUSALINK_TYPES = {
     "8.1.0": "coreonel",        # CORE One L / L+
     "8.10.0": "coreonel",       # CORE One L INDX
 }
+
+# PrusaLink on a Raspberry Pi: /api/version "original" = "PrusaLink <printer type>" (the Connect SDK's
+# PrinterType names) -> the type code Prusa Connect shows; "Unknown printer type" until PrusaLink knows it
+PI_TYPES = {"I3MK3S": "1.3.1", "I3MK3": "1.3.0", "I3MK25S": "1.2.6", "I3MK25": "1.2.5"}
+
+# type families whose sub-versions are different printers (1.3.0 MK3, 1.3.1 MK3S, 1.3.5 MK3.5,
+# 1.3.9 MK3.9 ...): an unknown sub-version is not taken for "<type>.<version>.0" - the job decides
+NO_SUBVERSION_FALLBACK = {"1.3"}
 
 # slicer printer_model strings (upper case, compared after removing spaces/dots) -> model key
 # (PrusaSlicer vendor bundle 2.5.11: MK4S/MK4SMMU3, MK4IS/MK4ISMMU3/MK4, MK3.9S, MK3.9, MK3.5,
@@ -53,7 +67,9 @@ _SLICER = [
     (r"^MK39S", "mk39s"),        # MK3.9S
     (r"^MK39", "mk39"),          # MK3.9, MK3.9MMU3
     (r"^MK35", "bedslinger"),    # MK3.5 / MK3.5S
-    (r"^MK3|^MK2", "bedslinger"),  # MK3S, MK3, MK2.5 ...
+    (r"^MK3S", "mk3s"),          # MK3S (also the MK3S+), MK3SMMU2S, MK3SMMU3
+    (r"^MK3", "mk3"),            # MK3, MK3MMU2
+    (r"^MK2", "bedslinger"),     # MK2.5, MK2.5S, MK2S ...
     (r"^COREONEL", "coreonel"),  # COREONEL, COREONEL-INDX
     (r"^COREONE", "coreone"),    # COREONE, COREONEMMU3, COREONEOAK, COREONE_INDX4T
     (r"^XL", "xl"),              # XLIS, XL2IS, XL5IS, XL, XLP1T ... XLP5T (XL+)
@@ -108,7 +124,15 @@ def from_prusalink(type_code: str | None) -> str | None:
         return PRUSALINK_TYPES[code]
     # unknown sub-version of a known type: fall back to "<type>.<version>.0"
     m = re.match(r"^(\d+)\.(\d+)", code)
-    return PRUSALINK_TYPES.get(f"{m.group(1)}.{m.group(2)}.0") if m else None
+    if not m or f"{m.group(1)}.{m.group(2)}" in NO_SUBVERSION_FALLBACK:
+        return None
+    return PRUSALINK_TYPES.get(f"{m.group(1)}.{m.group(2)}.0")
+
+
+def type_from_original(original: str | None) -> str | None:
+    """PrusaLink on a Raspberry Pi: "PrusaLink I3MK3S" -> "1.3.1"; None while it doesn't know."""
+    m = re.match(r"^\s*PrusaLink\s+(\w+)\s*$", str(original or ""))
+    return PI_TYPES.get(m.group(1).upper()) if m else None
 
 
 # Bambu Lab: model id (slice_info printer_model_id, SSDP DevModel) and the first three characters of

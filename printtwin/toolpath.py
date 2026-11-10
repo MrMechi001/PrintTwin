@@ -97,10 +97,12 @@ class Toolpath:
     layer_z: list = field(default_factory=list)
     layer_start: list = field(default_factory=list)
     tool_changes: list = field(default_factory=list)   # [segment index, tool] at every T<n> (XL tools, MMU filaments)
-    # progress anchors in the file (Bambu printers report only these, no position): the segment
-    # index at each "M73 L<layer>" and "M73 P<percent>" line
+    # progress anchors in the file (Bambu printers and PrusaLink on a Raspberry Pi report only these,
+    # no position): the segment index at each "M73 L<layer>", "M73 P<percent>" and - the MK3's
+    # stealth mode, timed with its slower limits - "M73 Q<percent>" line
     layer_marks: list = field(default_factory=list)     # [segment index, layer number]
     progress_marks: list = field(default_factory=list)  # [segment index, percent]
+    silent_marks: list = field(default_factory=list)    # [segment index, percent in stealth mode]
     meta: dict = field(default_factory=dict)
     text_size: int = 0
     complete: bool = False      # False while the job file is still arriving
@@ -356,14 +358,15 @@ class GcodeParser:
                     abs_e = True
                 elif raw.startswith(b"M83"):
                     abs_e = False
-                elif raw.startswith(b"M73 "):            # Bambu: "M73 L<layer>", "M73 P<percent> R<minutes>"
-                    for k, v in _WORD.findall(raw.split(b";", 1)[0], 4):
+                elif raw.startswith(b"M73 "):            # "M73 L<layer>" (Bambu), "M73 P<percent> R<minutes>",
+                    for k, v in _WORD.findall(raw.split(b";", 1)[0], 4):     # "M73 Q<percent> S<minutes>"
                         if k == b"L":
                             tp.layer_marks.append((len(ty), int(float(v))))
-                        elif k == b"P":
+                        elif k in (b"P", b"Q"):
+                            marks = tp.progress_marks if k == b"P" else tp.silent_marks
                             pc = int(float(v))
-                            if not tp.progress_marks or tp.progress_marks[-1][1] != pc:
-                                tp.progress_marks.append((len(ty), pc))
+                            if not marks or marks[-1][1] != pc:
+                                marks.append((len(ty), pc))
                 elif raw.startswith(b"M1020 ") and b"S" in raw:   # H2D / H2C: filament change "M1020 S<n>"
                     m1020 = re.search(rb"S(\d+)", raw.split(b";", 1)[0])
                     if m1020:

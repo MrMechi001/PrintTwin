@@ -8,27 +8,32 @@ status into the common shape below and says which job runs and how to download i
                         "axis_x", "axis_y", "axis_z", "speed", "flow", "fan_print", "fan_hotend"},
             "job": {"id", "progress" (0-100), "time_remaining", "time_printing"} or None}
   job    = {"id", "display_name", "name", "download", "size", "m_timestamp"}
-           (+ optional "plate" / "layers": which plate of a .gcode.3mf, the printer's layer count)
+           (+ optional "plate" / "layers": which plate of a .gcode.3mf, the printer's layer count;
+           "download" None: the printer can't hand the file out, e.g. a job on an MK3's SD card)
 """
 from __future__ import annotations
 
 import gzip
 import json
 import queue
+import re
 import threading
 import time
 import traceback
 import urllib.error
+from bisect import bisect_left, bisect_right
+from collections import deque
 from pathlib import Path
 
 from . import incoming, models
 from .metrics import parse_datagram
-from .prusalink import PrusaLink, split_host
+from .prusalink import PrusaLink, split_host, url_path
 from .toolpath import JobDecoder, JobFileError, load_file
-from .tracker import Tracker
+from .tracker import Z_TOL, Tracker
 
 POLL_S = 2.0
 RETRY_S = (5, 10, 20, 30)      # waits before retrying a job file the printer refused
+NO_DOWNLOAD_RETRY_S = 30.0     # a job the printer can't hand out: look for a hand-over again after this
 METRICS_STALE_S = 3.0
 
 
@@ -38,6 +43,11 @@ def log(*a):
 
 class _Superseded(Exception):
     """A newer job started while this one was still downloading."""
+
+
+class NotDownloadable(Exception):
+    """The printer can't hand out this job's file (a job on an MK3's SD card): only the slicer's
+    hand-over can give it to PrintTwin."""
 
 
 class BasePrinter:
@@ -56,7 +66,8 @@ class BasePrinter:
         self.model_cfg = str(cfg.get("model", "auto"))   # printer model to show, "auto" = detect
         self.printer_type: str | None = None             # PrusaLink /api/version "printer", e.g. "1.4.0"
         self.volume: dict | None = None                  # build volume the printer reports (Klipper)
-        self.estimated = False                           # progress estimated, not measured (Bambu)
+        self.estimated = False                           # progress estimated, not measured (Bambu, MK3)
+        self.note: str | None = None                     # why the printer can't be read, for the viewer
         self.lock = threading.RLock()
         self.subs: set[queue.Queue] = set()
 
@@ -119,7 +130,7 @@ class BasePrinter:
             model, model_src = models.resolve(self.model_cfg, job_model, self.printer_type)
             return {
                 "id": self.id, "name": self.name, "kind": self.kind,
-                "online": self.online,
+                "online": self.online, "note": None if self.online else self.note,
                 "model": model, "model_source": model_src,
                 "printer_type": self.printer_type, "printer_model": job_model,
                 "state": pr.get("state"),
@@ -184,6 +195,14 @@ class BasePrinter:
     def _job_file_rejected(self, job: dict, key: str, e: JobFileError):
         """The job file can't be shown (wrong plate, too large): not tried again. An adapter that
         can look for another file (Bambu) does that here."""
+
+    def _not_downloadable(self, job: dict) -> str | None:
+        """Why the printer can't hand out this job's file (None: it can)."""
+        return None
+
+    def _no_position(self, tracker: Tracker, pr: dict, jb: dict | None):
+        """No live position, no file position: place the print from what the status says."""
+        tracker.from_axis_z(pr.get("axis_z"), (jb or {}).get("progress"))
 
     def _drop_job(self, message: str | None = None):
         """Forget the current job and its model (a new print whose file isn't there yet)."""
@@ -260,7 +279,7 @@ class BasePrinter:
                 if time.time() - self.last_sdpos_wall < METRICS_STALE_S:
                     tr.from_sdpos_only()
                 else:
-                    tr.from_axis_z(pr.get("axis_z"), (jb or {}).get("progress"))
+                    self._no_position(tr, pr, jb)
 
     # ----------------------------------------------------------------- loader
     def _load_job(self, job: dict, key: str, gen: int):
@@ -289,6 +308,9 @@ class BasePrinter:
                 self._install(load_file(path, job.get("plate"), job.get("layers")), key, gen, job)
                 log(self.id, f"toolpath from {source} in {time.time() - t0:.1f} s")
                 return
+            why = self._not_downloadable(job)
+            if why:
+                raise NotDownloadable(why)
 
             dec = JobDecoder(plate=job.get("plate"), layers=job.get("layers"))
             # a new job clears the old model at once; a retry of a refused download shows the
@@ -332,6 +354,19 @@ class BasePrinter:
             log(self.id, f"downloaded + built in {time.time() - t0:.0f} s")
         except _Superseded:
             log(self.id, f"job {key} superseded while downloading")
+        except NotDownloadable as e:                 # only a hand-over can bring it: look again now and then
+            first = not (self._retry and self._retry[0] == key)
+            if first:
+                log(self.id, f"job file {job.get('display_name') or key}: {e}")
+            with self.lock:
+                if self._gen == gen:
+                    # not the last job's model: this print's file isn't there
+                    self.tp = self.tracker = None
+                    self.tp_key = self.tp_cache_key = self.tp_name = self._loading_key = None
+                    self.tp_gz, self.tp_info = b"", None
+                    self.loading = {"phase": "search", "message": str(e)}
+                    self._retry = (key, (self._retry[1] + 1) if not first else 1, time.time() + NO_DOWNLOAD_RETRY_S)
+            self.publish_state()
         except JobFileError as e:                    # trying the same file again won't help
             log(self.id, f"job file {job.get('display_name') or key}: {e}")
             with self.lock:
@@ -370,7 +405,7 @@ class BasePrinter:
         elif pr.get("state") == "PAUSED" and tracker.sdpos is not None:
             tracker.from_sdpos_only()                # paused: the file position is where it stopped
         else:                                        # capped at the file position when there is one
-            tracker.from_axis_z(pr.get("axis_z"), ((self.status or {}).get("job") or {}).get("progress"))
+            self._no_position(tracker, pr, (self.status or {}).get("job"))
 
     def _install(self, tp, key: str, gen: int, job: dict):
         """Make `tp` the current toolpath (complete, or still growing)."""
@@ -457,40 +492,294 @@ class BasePrinter:
         return [round(t, 1), round(x, 3), round(y, 3), round(z, 3), round(p, 3)]
 
 
+# PrusaLink answers that say why the status can't be read (shown in the viewer, logged once)
+NOTES = {401: "PrusaLink refused the login - check api_key (or user and password) in the config",
+         403: "PrusaLink refused the API key - check api_key in the config",
+         503: "PrusaLink is up, the printer is not connected"}   # Pi: the serial link to the printer is down
+SD_JOB = ("job on the SD card - PrintTwin can't download it; the slicer hand-over hook or PrintTwin "
+          "as print host gives it the file")
+TYPE_RETRY_S = 30.0        # PrusaLink on a Pi that doesn't know its printer yet: ask again after this
+NOID_CHECK_S = 10.0        # a job without id: compare its file this often
+EST_TICK_S = 0.5           # the estimate moves on between the 2 s status polls
+EST_Z_SAMPLES = 3          # Z must hold for this many polls before the layers below count as done
+PI_Z_TOL = 0.011           # PrusaLink on a Pi reports the G-code's own Z (two decimals, no bed mesh)
+
+
+def _num(v):
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _same_file(a: dict, b: dict) -> bool:
+    return all(a.get(k) == b.get(k) for k in ("name", "size", "m_timestamp"))
+
+
+def _window(marks: list, pct: float, n: int) -> tuple[int, int]:
+    """The segments between the last mark the percent passed and the next one."""
+    lo, hi = 0, n
+    for seg, v in marks:
+        if v <= pct:
+            lo = seg
+        else:
+            hi = seg
+            break
+    return lo, max(lo, hi)
+
+
+def _nearest(lz: list, z: float) -> int:
+    """Index of the layer height nearest to z (lz sorted, not empty)."""
+    i = bisect_left(lz, z)
+    if i >= len(lz) or (i > 0 and z - lz[i - 1] <= lz[i] - z):
+        i -= 1
+    return i
+
+
+class _Estimate:
+    """What the estimate of one print knows: the last Z samples, the percent and how long the
+    printer has been PRINTING since that percent first showed."""
+
+    def __init__(self, job: dict | None):
+        self.job = job
+        self.z: deque = deque(maxlen=EST_Z_SAMPLES)
+        self.pct: float | None = None
+        self.remaining: float | None = None
+        self.state: str | None = None
+        self.run = 0.0
+        self.t = time.time()
+        self.votes = {"P": 0, "Q": 0}             # which marks the percent follows: normal (P) or stealth (Q)
+        self.vote = False                          # a new Z sample to vote with
+
+    def advance(self, now: float):
+        if self.state == "PRINTING":              # time stands still while paused, heating, ...
+            self.run += max(0.0, now - self.t)
+        self.t = now
+
+
 class PrusaLinkPrinter(BasePrinter):
-    """Original Prusa printers with PrusaLink: HTTP status every 2 s + UDP firmware metrics."""
+    """Original Prusa printers with PrusaLink: HTTP status every 2 s + UDP firmware metrics.
+
+    PrusaLink on a Raspberry Pi (MK3 / MK3S / MK3S+, MK2.5/S) has no metrics and reports no X/Y
+    while printing - only Z every 2 s (the planned Z, z-hops included), the whole M73 percent and the
+    time left. Without metrics the place in the toolpath is estimated (_estimate_now): the layers
+    below the Z of the last polls are done (a z-hop doesn't count), the percent says between which
+    M73 marks of the job the print is, and the time since it changed says how far."""
     kind = "prusalink"
 
     def __init__(self, cfg: dict, cache_dir: Path, incoming_dir: Path = incoming.INCOMING):
         super().__init__(cfg, cache_dir, incoming_dir)
-        self.client = PrusaLink(self.host, cfg["api_key"])
+        key = str(cfg.get("api_key") or "").strip()
+        if key == "PRUSALINK-API-KEY":                # the example's placeholder: no key
+            key = ""
+        user, password = str(cfg.get("user") or "").strip(), str(cfg.get("password") or "")
+        if not key and not (user and password):
+            raise ValueError("no api_key (or user and password) in its [[printer]] block")
+        self.client = PrusaLink(self.host, key, user=user or None, password=password or None)
+        self.pi = False                    # PrusaLink on a Raspberry Pi (no "printer" in /api/version)
+        self.metrics_seen = False          # a file or nozzle position arrived over UDP
+        self.estimated = True              # ... until then the position is estimated
+        self._type_pending = True
+        self._type_logged = False
+        self._type_retry_at = 0.0
+        self._est: _Estimate | None = None
+        self._prev_state: str | None = None
+        self._prev_progress: float | None = None
+        self._noid_at = 0.0
 
+    def start(self):
+        super().start()
+        threading.Thread(target=self._tick_loop, name=f"estimate-{self.id}", daemon=True).start()
+
+    def snapshot(self) -> dict:
+        snap = super().snapshot()
+        if self.estimated and not self.pi:
+            snap["metrics"]["hint"] = "turn on the printer's metrics for the live nozzle"
+        return snap
+
+    # ------------------------------------------------------------ adapter hooks
     def _fetch_status(self) -> dict | None:
-        code, data = self.client.get_json("/api/v1/status")
-        return data if code == 200 and isinstance(data, dict) else None
+        try:
+            code, data = self.client.get_json("/api/v1/status")
+        except Exception:
+            self.note = None                          # not even PrusaLink answers
+            raise
+        if code in NOTES:
+            self.note = NOTES[code]
+            raise ConnectionError(self.note)
+        self.note = None
+        if code != 200 or not isinstance(data, dict):
+            return None
+        if self._type_pending and self.online and time.time() >= self._type_retry_at:
+            try:
+                self._read_version()
+            except Exception:
+                pass
+        return data
 
     def _on_online(self):
         if self.printer_type is None:
-            _, ver = self.client.get_json("/api/version")
-            self.printer_type = (ver or {}).get("printer")
-            model, src = models.resolve(self.model_cfg, None, self.printer_type)
-            log(self.id, f"printer type {self.printer_type!r} -> model {model or 'unknown'} ({src})")
+            self._read_version()
+
+    def _read_version(self):
+        """The printer model: Buddy firmware has "printer" in /api/version, PrusaLink on a Pi only
+        "original" ("PrusaLink I3MK3S"; "Unknown printer type" until it knows - asked again then)."""
+        self._type_retry_at = time.time() + TYPE_RETRY_S
+        code, ver = self.client.get_json("/api/version")
+        if code != 200 or not isinstance(ver, dict):
+            return
+        pi = "printer" not in ver and ("original" in ver or bool(re.match(r"PrusaLink \d", str(ver.get("text") or ""))))
+        t = ver.get("printer") or models.type_from_original(ver.get("original"))
+        self._type_pending = pi and not t
+        if pi and not self.pi:
+            log(self.id, f"{ver.get('text') or 'PrusaLink'} on a Raspberry Pi: no metrics there - "
+                         f"the position is estimated from Z and progress")
+        self.pi = pi
+        if t != self.printer_type or not self._type_logged:
+            self._type_logged = True
+            self.printer_type = t
+            model, src = models.resolve(self.model_cfg, None, t)
+            log(self.id, f"printer type {t!r} -> model {model or 'unknown'} ({src})")
+
+    def _on_status(self, data: dict):
+        self._observe(data)          # first: the fallback in there (_no_position) uses this poll's Z and percent
+        super()._on_status(data)
 
     def _current_job(self, data: dict) -> dict | None:
         jb = data.get("job")
-        if not jb or (self.job and self.job.get("id") == jb.get("id")):
+        state = (data.get("printer") or {}).get("state")
+        prev_state, self._prev_state = self._prev_state, state
+        progress = _num((jb or {}).get("progress"))
+        prev_progress, self._prev_progress = self._prev_progress, progress
+        if not jb:
             return None
+        jid, old = jb.get("id"), self.job
+        if old and jid is not None and old.get("id") == jid:
+            return None
+        restarted = False
+        if jid is None:
+            # no job id (PrusaLink just restarted): its file - or a fresh start - tells whether it's another print
+            now = time.time()
+            if old:
+                restarted = (state == "PRINTING" and prev_state in ("FINISHED", "STOPPED", "IDLE", "READY")) or (
+                    progress is not None and prev_progress is not None and progress < prev_progress - 5)
+                if not restarted and now < self._noid_at:
+                    return None
+            self._noid_at = now + NOID_CHECK_S
         code, job = self.client.get_json("/api/v1/job")
         if code != 200 or not job or not job.get("file"):
             return None
-        self.last_sdpos = None                       # sdpos from the previous job no longer counts
         f = job["file"]
-        return {"id": job["id"], "display_name": f.get("display_name") or f.get("name"),
-                "download": f["refs"]["download"], "size": f.get("size"),
-                "m_timestamp": f.get("m_timestamp"), "name": f.get("name")}
+        new = {"id": job.get("id"), "display_name": f.get("display_name") or f.get("name"),
+               "download": (f.get("refs") or {}).get("download"), "size": f.get("size"),
+               "m_timestamp": f.get("m_timestamp"), "name": f.get("name")}
+        if old and (new["id"] is None or old.get("id") is None) and not restarted and _same_file(old, new):
+            if new["id"] is not None:
+                old["id"] = new["id"]                 # the same print, its id known (again)
+            return None
+        self.last_sdpos = None                       # sdpos from the previous job no longer counts
+        self._est = None
+        return new
+
+    def _not_downloadable(self, job: dict) -> str | None:
+        return None if job.get("download") else SD_JOB
 
     def _stream(self, job: dict, on_chunk):
-        self.client.stream(job["download"], on_chunk)
+        # PrusaLink on a Pi: "/api/files/local/PrusaLink gcodes/<name>/raw" - with a space
+        self.client.stream(url_path(job["download"]), on_chunk)
+
+    # ---------------------------------------------------------------- estimate
+    def _observe(self, data: dict):
+        """Z, percent and time left of this poll, for the estimate."""
+        pr, jb = data.get("printer") or {}, data.get("job") or {}
+        with self.lock:
+            est = self._est
+            if est is None or est.job is not self.job:
+                est = self._est = _Estimate(self.job)
+            est.advance(time.time())
+            est.state = pr.get("state")
+            z = _num(pr.get("axis_z"))
+            if est.state == "PRINTING" and z is not None:
+                est.z.append(z)
+                est.vote = True
+            pct = _num(jb.get("progress"))
+            if pct != est.pct:
+                est.pct, est.run = pct, 0.0
+            est.remaining = _num(jb.get("time_remaining"))
+
+    def _no_position(self, tracker: Tracker, pr: dict, jb: dict | None):
+        if self.estimated:
+            self._estimate_now(tracker)
+        else:                                        # metrics, but none just now: as before
+            super()._no_position(tracker, pr, jb)
+
+    def _tick_loop(self):
+        while True:
+            time.sleep(EST_TICK_S)
+            if not self.estimated:
+                continue
+            try:
+                with self.lock:
+                    sample = self._estimate_now(self.tracker) if self.online and self.tracker else None
+                    key = self.tp_key
+                if sample:
+                    self.publish("pos", {"s": [sample], "key": key})
+            except Exception:
+                traceback.print_exc()
+
+    def _estimate_now(self, tr: Tracker) -> list | None:
+        """Place the print (self.lock held); returns a "pos" sample when it moved on."""
+        est = self._est
+        tp = tr.tp
+        n = tp.count
+        if est is None or est.job is not self.job or not n:
+            return None
+        est.advance(time.time())
+        pct, lz, ls = est.pct, tp.layer_z, tp.layer_start
+        # Z: the layers below the lowest Z of the last polls are done (a z-hop or a travel isn't a
+        # layer, and the planned Z runs ahead of the nozzle); the layer of the latest Z isn't passed.
+        # Not at 0 %: the start G-code (probing, purge line) moves through the first layers' heights.
+        lo_z, hi_z = 0, n
+        if lz and est.z and pct is not None and pct > 0:
+            top = lz[-1] + Z_TOL
+            if self.pi:                               # exact G-code Z: anything else is a hop or a travel
+                zs = [z for z in est.z if z <= top and abs(lz[_nearest(lz, z)] - z) <= PI_Z_TOL]
+                if zs:
+                    lo_z = ls[_nearest(lz, min(zs))]
+            else:                                     # Buddy: the Z may include the bed mesh
+                zs = [z for z in est.z if z <= top]
+                i = bisect_right(lz, min(zs) + 1e-3) - 1 if zs else -1
+                if i >= 0:
+                    lo_z = ls[i]
+            last = est.z[-1]
+            if last <= top:
+                j = bisect_right(lz, last + (PI_Z_TOL if self.pi else Z_TOL))
+                if j < len(ls):
+                    hi_z = max(lo_z, ls[j])
+        # the percent: between the M73 marks it passed and the next; normal (P) or stealth mode (Q) -
+        # the printer doesn't say which, so the marks whose window fits the Z win
+        wins = {}
+        if pct is not None:
+            for k, marks in (("P", tp.progress_marks), ("Q", tp.silent_marks)):
+                if marks:
+                    wins[k] = _window(marks, pct, n)
+        if est.vote and len(wins) == 2 and (lo_z > 0 or hi_z < n):
+            fits = {k: lo < hi_z and hi > lo_z for k, (lo, hi) in wins.items()}
+            if fits["P"] != fits["Q"]:
+                est.votes["P" if fits["P"] else "Q"] += 1
+        est.vote = False
+        use = "Q" if "Q" in wins and (est.votes["Q"] > est.votes["P"] or "P" not in wins) else "P"
+        p = float(lo_z)
+        if use in wins:
+            lo, hi = wins[use]
+            left = 100.0 - pct
+            per_pct = est.remaining / left if est.remaining and left > 0 else None
+            frac = min(0.999, est.run / per_pct) if per_pct and pct > 0 else 0.0
+            p = lo + frac * (hi - lo)
+        p = min(max(p, float(lo_z)), max(float(lo_z), hi_z - 1e-3))
+        before = tr.printed
+        tr.advance_to(p)
+        if tr.printed > before and tr.nozzle:
+            x, y, z = tr.nozzle
+            return [round(time.time() * 1000, 1), round(x, 3), round(y, 3), round(z, 3), round(tr.printed, 3)]
+        return None
 
     # ---------------------------------------------------------------- metrics
     def on_datagram(self, payload: bytes):
@@ -504,6 +793,7 @@ class PrusaLinkPrinter(BasePrinter):
             pend = self._pending
             for t_us, name, _, f in samples:
                 if name == "sdpos":
+                    self._live()
                     self._feed(f["v"], None, now)
                 elif name == "pos_x":
                     pend.clear()
@@ -513,8 +803,15 @@ class PrusaLinkPrinter(BasePrinter):
                 elif name == "pos_z" and "y" in pend:
                     x, y, z, t = pend["x"], pend["y"], f["v"], pend["t"]
                     pend.clear()
+                    self._live()
                     sample = self._feed(None, [t / 1000, x, y, z], now)
                     if sample:
                         out.append(sample)
         if out:
             self.publish("pos", {"s": out, "key": self.tp_key})
+
+    def _live(self):
+        """The printer sends its file / nozzle position: no more estimates (self.lock held)."""
+        if not self.metrics_seen:
+            self.metrics_seen, self.estimated = True, False
+            log(self.id, "metrics arrive: live position")

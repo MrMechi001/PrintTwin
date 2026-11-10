@@ -24,12 +24,13 @@ PrintTwin started on the Original Prusa MK4 – **support for more printers is i
 | **Original Prusa MK4S** | PrusaLink + firmware metrics | 🧪 should work today (same firmware) – **testers wanted**; true-to-size 3D model |
 | Original Prusa MK3.9 / MK3.9S | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; shown as the MK4 / MK4S (approximate) |
 | Original Prusa MINI / MINI+ | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; true-to-size 3D model |
+| Original Prusa MK3 / MK3S / MK3S+ | PrusaLink on a Raspberry Pi | 🧪 new – tested against a simulated PrusaLink 0.7.2, **testers wanted**; position *estimated* from Z and progress (PrusaLink reports no nozzle position); SD-card jobs need the slicer hand-over or PrintTwin as print host; generic bed-slinger model until the MK3S+ model is done |
 | Original Prusa XL | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; 3D model with Prusa's parts, frame estimated (approximate) |
 | Prusa CORE One / CORE One L | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY model until their own is done |
 | **Klipper printers** (Voron 2.4 / Trident / V0, Sovol SV08, RatRig, Creality K1, Qidi, Elegoo, … – anything with Moonraker) | Moonraker | 🧪 new – tested against a simulated Moonraker, **testers wanted**; generic CoreXY (bed or flying gantry) or bed-slinger model |
-| OctoPrint printers (Prusa MK3S/MK3S+, Ender 3 …) | OctoPrint API | 📋 planned |
+| OctoPrint printers (Ender 3 …) | OctoPrint API | 📋 planned |
 | **Bambu Lab** (X1, P1, P2S, X2D, A1, A1 mini, A2L, H2D/H2S/H2C) | MQTT + FTPS on the local network (read-only) | 🧪 new – tested against a simulated printer, **testers wanted**; position *estimated* from layer and progress (Bambu printers report no nozzle position); generic CoreXY / bed-slinger model |
-| True-to-size models for the *Printer* view: CORE One, CORE One L; the XL refined | – | 📋 planned |
+| True-to-size models for the *Printer* view: MK3S+, CORE One, CORE One L; the XL refined | – | 📋 planned |
 
 PrintTwin asks the printer which model it is (PrusaLink), so the *Printer* view picks the
 right one by itself; `model = "mk4s"` in the config overrides it. Klipper doesn't know its
@@ -72,7 +73,8 @@ independent project, not affiliated with Prusa Research.
 3. Start it: Windows `PrintTwin.bat` (double-click), macOS/Linux `./start.sh`.
    The first start creates `config.local.toml` and stops.
 4. Open `config.local.toml` in a text editor and enter your printer's **IP address** and
-   **PrusaLink API key** (printer: *Settings → Network*, and *Settings → Network → PrusaLink*).
+   **PrusaLink API key** (printer: *Settings → Network*, and *Settings → Network → PrusaLink*;
+   MK3 / MK3S / MK3S+: see [below](#original-prusa-mk3--mk3s--mk3s-prusalink-on-a-raspberry-pi)).
 5. Start PrintTwin again – the viewer opens at <http://localhost:8790/>.
    Windows asks once whether Python may use the network: allow it on **private networks**.
 
@@ -86,6 +88,36 @@ On the printer: **Settings → Network → Metrics & Log**
 * in the **Metrics List** switch on `pos_x`, `pos_y`, `pos_z` (`sdpos` is on by default).
 
 The HUD shows what arrives: *Live nozzle position · 80 Hz* when everything is set.
+
+### Original Prusa MK3 / MK3S / MK3S+ (PrusaLink on a Raspberry Pi)
+
+The MK3 family talks to PrusaLink running on a Raspberry Pi (Prusa's Pi image, PrusaLink 0.7 / 0.8):
+
+```toml
+[[printer]]
+id = "mk3s"
+name = "Prusa MK3S+"
+kind = "prusalink"
+host = "192.168.1.50:8080"    # the Pi's address (PrusaLink listens on 8080; Prusa's Pi image also on 80)
+api_key = "..."               # PrusaLink's web page: Settings -> API key ...
+# user = "..."                # ... or the user name and password you chose in PrusaLink's setup
+# password = "..."
+```
+
+* **Position estimated:** PrusaLink on the Pi reports no nozzle position (no metrics, no X/Y while
+  printing) – only the height every 2 s, the percent and the time left. PrintTwin places the print
+  between the job's progress marks, inside the layer the printer is at (a Z hop doesn't count as a
+  layer), and moves it on with the time; the HUD says *estimated*. Stealth mode is recognised (its
+  percent follows other marks in the G-code).
+* **Jobs from the SD card** can't be downloaded from PrusaLink: use the slicer hand-over (below) or
+  PrintTwin as the print host – then PrintTwin has the file. Jobs uploaded to the Pi (PrusaSlicer,
+  Prusa Connect) are downloaded as usual. The MK3 prints plain `.gcode` (no `.bgcode`).
+* **Model:** PrintTwin reads the printer type from PrusaLink (`PrusaLink I3MK3S` → MK3S / MK3S+, the
+  same type code for both). The *Printer* view shows the generic bed-slinger until the true-to-size
+  MK3S+ model is done.
+* **Printer somewhere else** (workshop, another network): PrintTwin needs to reach the Pi's address –
+  use a VPN such as Tailscale on the PC and the Pi and put the Pi's Tailscale address into `host`.
+  Don't forward PrusaLink's port on your router.
 
 ### Klipper printers (Voron & co.)
 
@@ -155,7 +187,7 @@ PrintTwin keeps a copy of the file, so the model is ready the moment the print s
    * Hostname / URL: `http://<IP of the PC running PrintTwin>:8790/p/<printer id>`,
      e.g. `http://192.168.1.20:8790/p/mk4` (the `id` from `config.local.toml`)
    * Authorization type **API key**: the printer's PrusaLink password / API key (printer:
-     *Settings → Network → PrusaLink*), then *Test*.
+     *Settings → Network → PrusaLink*; MK3 family: PrusaLink's web page, *Settings → API key*), then *Test*.
    * **Klipper printers**: host type **Klipper (via Moonraker)** (PrusaSlicer) or **Moonraker
      (Klipper)** (OrcaSlicer 2.4+) – *OctoPrint* / *Octo/Klipper* works too if Moonraker has
      `[octoprint_compat]`; API key only if your Moonraker wants one.
@@ -208,7 +240,8 @@ up while the file downloads.
   the whole LAN (Moonraker `trusted_clients`): there PrintTwin passes on only uploads and the
   start of an uploaded file, and only from LAN addresses unless the slicer sends Moonraker's
   API key.
-* The API key stays in `config.local.toml` on your computer; the browser never sees it.
+* The API key (or PrusaLink user and password) stays in `config.local.toml` on your computer; the
+  browser never sees it.
 * The viewer has **no login**: anyone on your network can watch. Keep it there – don't
   forward the port on your router. For remote viewing use a VPN such as Tailscale.
 * No cloud, no telemetry. Files stay in the PrintTwin folder (`cache/`, `incoming/`, `logs/`).
@@ -245,9 +278,10 @@ Measured on an MK4 (firmware 8.0.0, PrusaSlicer 2.9.7):
 * Over Wi-Fi ~3 % of the metric datagrams are lost and they arrive in ~150 ms bursts;
   the viewer plays them back 450 ms delayed for smooth motion.
 
-Fallbacks: file position only → fixed planner lag; no metrics → PrusaLink's Z height
-(layer-exact). The HUD warns ("file position off") if the printer's file and PrintTwin's
-copy disagree.
+Fallbacks: file position only → fixed planner lag; no metrics → *estimated* from PrusaLink's
+Z height (the layer), percent and time left, between the job's M73 progress marks (MK3 family on a
+Raspberry Pi, Bambu Lab: always). Once metrics arrive the live position takes over. The HUD warns
+("file position off") if the printer's file and PrintTwin's copy disagree.
 
 ### The MK4 and MK4S models
 
@@ -311,14 +345,18 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
   incremental decoding; `python -I tests/test_bridge.py` – end-to-end with a simulated printer;
   `tests/test_slicerhost.py` – the slicer print host; `tests/test_bambu.py` – Bambu Lab printers
   end to end; `tests/test_mqtt.py` – the MQTT client; `tests/test_moonraker.py` – Klipper
-  printers end to end; `tests/test_models.py` – printer detection; `tests/test_glb_models.py`
-  – the 3D printer models.
+  printers end to end; `tests/test_mk3.py` – MK3 / MK3S+ with PrusaLink on a Raspberry Pi (digest
+  login, SD-card jobs, the estimated position) and the MK4's live metrics; `tests/test_models.py` –
+  printer detection; `tests/test_glb_models.py` – the 3D printer models.
 * `python -I tools/sim_printer.py JOB.bgcode --kbps 18 [--handover] [--type 3.1.0]` – a fake
   PrusaLink printer plus the bridge on port 8791: try PrintTwin without a printer; `--type`
   picks the printer it pretends to be (PrusaLink type codes in `printtwin/models.py`, e.g.
   `1.4.1` MK4S, `2.1.0` MINI, `3.1.0` XL). It is also a print host for a slicer:
   `http://localhost:8791/p/sim`, host type PrusaLink, API key `sim` – *Upload and print*
-  makes the upload the simulated job.
+  makes the upload the simulated job. `--pi` (or `--type 1.3.1`) makes it an MK3S+ with PrusaLink
+  0.7.2 on a Raspberry Pi: `--stealth`, `--sd` (job on the SD card), `--digest USER:PASS` (digest
+  login instead of the key), `--no-printer S` (503: printer not connected), `--dir D` (one folder per
+  simulator).
 * `python -I tools/sim_bambu.py JOB.gcode.3mf [--style p1|x1] [--internal] [--handover] [--pin]` – a
   simulated Bambu printer (TLS MQTT + FTPS, needs the openssl tool) plus the bridge on port 8796.
 * `python -I tools/sim_moonraker.py JOB.gcode [--qgl] [--duration 120] [--api-key K] [--rewrite]`

@@ -5,10 +5,11 @@ the most valuable help right now is **testing on printers we don't have**.
 
 ## Test PrintTwin with your printer
 
-Works with any printer that has **PrusaLink** today (MK4S, MK3.9, CORE One, XL, MINI …):
+Works with any printer that has **PrusaLink** today (MK4S, MK3.9, CORE One, XL, MINI …, and the
+MK3 / MK3S / MK3S+ with PrusaLink on a Raspberry Pi):
 
 1. Set it up as in the [README quick start](README.md#quick-start), including the
-   printer's metrics (*Settings → Network → Metrics & Log*).
+   printer's metrics (*Settings → Network → Metrics & Log*; the MK3 family has none).
 2. Start a print and watch for a few minutes.
 3. Open an issue with the **"Printer test report"** template and tell us:
    * printer model and firmware version (*Settings → Info*),
@@ -56,8 +57,9 @@ allows redistribution (e.g. GPL, CC BY, CC BY-SA) and must not contain manufactu
 ## Development
 
 * Python 3.11+, **standard library only** for the bridge (no `pip install` for users).
-* Tests: `python -I tests/test_toolpath.py`, `tests/test_models.py`, `tests/test_glb_models.py`
-  and `tests/test_bridge.py` (CI runs them on Windows and Linux, Python 3.11–3.13).
+* Tests: `python -I tests/test_toolpath.py`, `tests/test_models.py`, `tests/test_glb_models.py`,
+  `tests/test_bridge.py`, `tests/test_mk3.py` and the others in `tests/` (CI runs them on Windows and
+  Linux, Python 3.11–3.13).
 * Try changes without a printer: `python -I tools/sim_printer.py tests/fixtures/sample.bgcode`
   → <http://localhost:8791/>.
 * Keep pull requests focused; describe what you tested (printer, firmware, slicer).

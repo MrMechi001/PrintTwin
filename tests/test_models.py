@@ -1,11 +1,14 @@
 """Printer model detection: slicer printer_model strings, PrusaLink type codes, priorities.
+Also: every model key has an entry in web/printers.js (with a fallback while its GLB is missing).
 
 usage: python -I tests/test_models.py
 """
+import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 from printtwin import models  # noqa: E402
 
 failures = 0
@@ -24,7 +27,7 @@ for s, want in [("MK4", "mk4"), ("MK4IS", "mk4"), ("MK4ISMMU3", "mk4"), ("MK4S",
                 ("MINI", "mini"), ("MINIIS", "mini"), ("ENDER3", None), ("", None), (None, None)]:
     check(f"slicer {s!r}", models.from_slicer(s), want)
 
-for s, want in [("MK3.5", "bedslinger"), ("MK3S", "bedslinger"), ("MK2.5S", "bedslinger"),
+for s, want in [("MK3.5", "bedslinger"), ("MK3S", "mk3s"), ("MK2.5S", "bedslinger"),
                 ("XLP5T", "xl"), ("XL2IS", "xl"), ("COREONEOAK", "coreone"), ("COREONE_INDX4T", "coreone"),
                 ("COREONEL-INDX", "coreonel"), ("MK3.9SMMU3", "mk39s")]:
     check(f"slicer {s!r}", models.from_slicer(s), want)
@@ -36,6 +39,41 @@ for code, want in [("1.4.0", "mk4"), ("1.4.1", "mk4s"), ("1.3.9", "mk39"), ("1.3
     check(f"prusalink {code}", models.from_prusalink(code), want)
 check("prusalink unknown sub-version 1.4.7", models.from_prusalink("1.4.7"), "mk4")
 check("prusalink unknown 9.9.9", models.from_prusalink("9.9.9"), None)
+
+# MK3 family: PrusaLink on a Raspberry Pi names the printer only in /api/version "original"
+for s, want in [("MK3S", "mk3s"), ("MK3SMMU2S", "mk3s"), ("MK3SMMU3", "mk3s"), ("MK3", "mk3"), ("MK3MMU2", "mk3"),
+                ("MK3.5S", "bedslinger"), ("MK3.9", "mk39"), ("MK2.5", "bedslinger"), ("MK2.5SMMU2S", "bedslinger")]:
+    check(f"slicer {s!r}", models.from_slicer(s), want)
+for orig, want in [("PrusaLink I3MK3S", "1.3.1"), ("PrusaLink I3MK3", "1.3.0"), ("PrusaLink I3MK25", "1.2.5"),
+                   ("PrusaLink I3MK25S", "1.2.6"), ("Unknown printer type", None), ("PrusaLink", None), (None, None),
+                   ("PrusaLink I3MK39", None)]:
+    check(f"original {orig!r}", models.type_from_original(orig), want)
+for code, want in [("1.3.1", "mk3s"), ("1.3.0", "mk3"), ("1.2.5", "bedslinger"), ("1.2.6", "bedslinger"),
+                   ("1.3.10", "mk39s"), ("1.3.9", "mk39")]:
+    check(f"prusalink {code}", models.from_prusalink(code), want)
+# an unknown 1.3.x is another MK3-family printer (MK3, MK3S, MK3.5, MK3.9 ... all differ): not taken
+# for the MK3 (1.3.0) - the job's printer_model decides
+check("prusalink unknown 1.3.7 -> not the MK3", models.from_prusalink("1.3.7"), None)
+check("prusalink unknown 1.3.11 -> not the MK3", models.from_prusalink("1.3.11"), None)
+check("unknown 1.3.x: the job decides", models.resolve("auto", "MK3.9S", "1.3.7"), ("mk39s", "job"))
+check("unknown 1.3.x, no job: unknown", models.resolve("auto", None, "1.3.7"), (None, "unknown"))
+check("MK3S+ on a Pi: the printer before the job",
+      models.resolve("auto", "MK4S", models.type_from_original("PrusaLink I3MK3S")), ("mk3s", "printer"))
+check("PrusaLink on a Pi not knowing its printer yet: the job", models.resolve("auto", "MK3S", None), ("mk3s", "job"))
+check("config mk3s", models.resolve("mk3s", None, None), ("mk3s", "config"))
+check("config mk3", models.resolve("mk3", None, "1.3.1"), ("mk3", "config"))
+
+# web/printers.js: every model key is there; the MK3 entries use mk3s.glb and fall back to the
+# generic bed-slinger while it doesn't exist (the viewer skips a GLB /api/models doesn't list, and a
+# 404 falls back like any failed load)
+js = (ROOT / "web" / "printers.js").read_text(encoding="utf-8")
+entries = {m.group(1): m.group(2) for m in re.finditer(r"^\s+(\w+):\s*\{(.*?)\},?\s*$", js, re.M)}
+check("printers.js: an entry per model key", sorted(k for k in models.MODEL_KEYS if k not in entries), [])
+for key in ("mk3s", "mk3"):
+    e = entries.get(key, "")
+    check(f"printers.js {key}: mk3s.glb, falls back to the bed-slinger",
+          ("models/mk3s.glb" in e and "fallback: 'bedslinger'" in e), True)
+check("printers.js mk3: marked approximate", "approx: true" in entries.get("mk3", ""), True)
 
 check("config wins", models.resolve("coreone", "MK4IS", "1.4.0"), ("coreone", "config"))
 check("printer hardware before job", models.resolve("auto", "MK4IS", "1.4.1"), ("mk4s", "printer"))
