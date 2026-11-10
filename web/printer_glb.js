@@ -8,12 +8,21 @@
 // Optional anchors in extras.printtwin: lcd_screen (+ lcd_portrait), spool, filament_inlet_carriage
 // or filament_inlet_xaxis, cable_start_carriage + cable_end_static, bowden (start_xaxis, dir_start,
 // end_carriage, dir_end, length, radius).
+//   lcd_style 'char20x4': a 20x4 character LCD (MK3S+, HD44780 5x8 dots) showing the Prusa firmware 3.x
+//              status screen instead of the graphic one; lcd_screen then spans the module's viewing area
+//              (76 x 25.2 mm), corners bottom-left, bottom-right, top-right, top-left as always.
+//              lcd_name: the machine name in the idle line "<name> ready." (default 'Prusa i3 MK3S').
+//   spool.axis: unit vector the spool turns about (default [1, 0, 0]: unchanged). Any other axis: the
+//              filament leaves the winding where the line from the inlet touches it, on the side a
+//              right-handed turn about the axis leads to (flip the axis to take it off the other side).
+//   cable_handles [[dx, dy, dz], [dx, dy, dz]]: the extruder cable's Bezier handles, mm from
+//              cable_start_carriage / cable_end_static (default: a sagging loop); cable_radius (4.2).
 //
 // Printer interface (also printer3d.js / printer_corexy.js): { root, bedParts, setPose(x, y, z),
 // bedOffset(x, y, z, out), setFans, setFilament, setHeat, setLcd, tick, nozzleWorld, bounds, floorZ }
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { makeCable, makeLcd, makeSpool, makeStrand, placeCyl, spoolDirection, spoolTurnsFor } from './printer_common.js';
+import { makeCable, makeLcd, makeSpool, makeStrand, placeCyl, spinSpool, spoolDirection, spoolTurnsFor } from './printer_common.js';
 
 export async function buildPrinter(url, { recolor = {} } = {}) {
   const gltf = await new GLTFLoader().loadAsync(url);
@@ -70,14 +79,19 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
     root.add(plane);
   }
 
-  const lcd = meta.lcd_screen ? makeLcd(meta.lcd_screen, { portrait: !!meta.lcd_portrait }) : null;
+  const lcd = meta.lcd_screen
+    ? makeLcd(meta.lcd_screen, { portrait: !!meta.lcd_portrait, style: meta.lcd_style, name: meta.lcd_name }) : null;
   if (lcd) root.add(lcd.mesh);
 
   const filMat = new THREE.MeshStandardMaterial({ color: 0xff8000, roughness: 0.45 });
   const sp = meta.spool;
   const spool = sp ? makeSpool(sp, filMat) : null;
   if (spool) { spool.position.set(...sp.center); root.add(spool); }
-  const cable = meta.cable_start_carriage ? makeCable() : null;
+  const spAxis = spool?.userData.axis && new THREE.Vector3(...spool.userData.axis);   // null: along X
+  const spCenter = sp && new THREE.Vector3(...sp.center);
+  const cable = meta.cable_start_carriage ? makeCable(meta.cable_radius) : null;
+  const cableHandles = Array.isArray(meta.cable_handles) && meta.cable_handles.length === 2
+    ? meta.cable_handles.map((h) => new THREE.Vector3(...h)) : null;
   // filament inlet: on the print head (Nextruder) or on the Z carriage (MINI: extruder moves with Z only)
   const inletCarriage = !!meta.filament_inlet_carriage;
   const inletAt = meta.filament_inlet_carriage || meta.filament_inlet_xaxis;
@@ -203,15 +217,38 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
   const filFrom = new THREE.Vector3(), filTo = new THREE.Vector3(), shift = new THREE.Vector3();
   let spoolTurns = 0, spoolDir = 0;
 
+  // spool on spool.axis: where the strand to `to` leaves the winding (radius wr) - at `to`'s place along
+  // the axis (within the winding), where the line from `to` touches the winding circle; of the two such
+  // points the one a right-handed turn about the axis leads to from `to`'s direction
+  const uw = new THREE.Vector3(), uwSide = new THREE.Vector3();
+  function unwindPoint(to, wr, out) {
+    uw.subVectors(to, spCenter);
+    const along = uw.dot(spAxis);
+    uw.addScaledVector(spAxis, -along);                        // in the plane of the winding
+    let d = uw.length();
+    if (d < 1e-6) { uw.set(0, 0, -1); d = 1; }                 // inlet on the axis line: hang down
+    uw.divideScalar(d);
+    const cos = Math.min(1, wr / d), sin = Math.sqrt(1 - cos * cos);   // inlet inside the circle: radial
+    uwSide.crossVectors(spAxis, uw);
+    const lim = sp.width / 2 - 6;
+    return out.copy(spCenter).addScaledVector(spAxis, Math.min(Math.max(along, -lim), lim))
+      .addScaledVector(uw, wr * cos).addScaledVector(uwSide, wr * sin);
+  }
+
   function setPose(x, y, z) {
     pose.x = x; pose.y = y; pose.z = z;
     carriage.position.x = x;
     if (corexy) { axis.position.y = y; shift.set(x, y, 0); } else { axis.position.z = z; shift.set(x, 0, z); }
     if (cable) {
       cs.copy(cableStart).add(shift);
-      // sagging loop: out to the side of the head, down, then into the electronics
-      p1.set(cs.x - 70, cs.y - 25, cs.z - 40);
-      p2.set(cableEnd.x + 40, cableEnd.y - 70, Math.min(cs.z, cableEnd.z) - 30);
+      if (cableHandles) {                    // the model's own bundle shape
+        p1.copy(cs).add(cableHandles[0]);
+        p2.copy(cableEnd).add(cableHandles[1]);
+      } else {
+        // sagging loop: out to the side of the head, down, then into the electronics
+        p1.set(cs.x - 70, cs.y - 25, cs.z - 40);
+        p2.set(cableEnd.x + 40, cableEnd.y - 70, Math.min(cs.z, cableEnd.z) - 30);
+      }
       cable.set(cs, p1, p2, cableEnd);
     }
     if (bowden) {
@@ -237,8 +274,11 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
       filTo.copy(inlet);
       if (inletCarriage) filTo.add(shift); else filTo.z += corexy ? 0 : z;
       const wr = spool.userData.windingRadius;
-      filFrom.set(Math.min(Math.max(filTo.x, sp.center[0] - sp.width / 2 + 6), sp.center[0] + sp.width / 2 - 6),
-        sp.center[1] - wr * 0.7, sp.center[2] - wr * 0.7);
+      if (spAxis) unwindPoint(filTo, wr, filFrom);
+      else {
+        filFrom.set(Math.min(Math.max(filTo.x, sp.center[0] - sp.width / 2 + 6), sp.center[0] + sp.width / 2 - 6),
+          sp.center[1] - wr * 0.7, sp.center[2] - wr * 0.7);
+      }
       strand.set(filFrom, filTo);
     }
   }
@@ -258,7 +298,7 @@ export async function buildPrinter(url, { recolor = {} } = {}) {
     tick() {
       if (!spool) return;
       spoolDir ||= strand ? spoolDirection(spool, filFrom, filTo, root) : 1;   // unwinds towards the extruder
-      spool.rotation.x = spoolDir * spoolTurns * Math.PI * 2;
+      spinSpool(spool, spoolDir * spoolTurns * Math.PI * 2);
     },
     nozzleWorld: (out) => (corexy ? out.set(pose.x, pose.y, NOZZLE_Z) : out.set(pose.x, NOZZLE_Y, pose.z)),
     bounds: { min: lo, max: [hi[0], hi[1], Math.max(hi[2], sp ? sp.center[2] + sp.radius : hi[2])] },
