@@ -10,14 +10,13 @@ import webbrowser
 from pathlib import Path
 
 from . import __version__, config, incoming
-from .config import ROOT
+from .config import PLACEHOLDERS, ROOT, filled  # noqa: F401 (PLACEHOLDERS: as before, for scripts)
 from .bambu import BambuPrinter
 from .moonraker import MoonrakerPrinter
 from .printer import PrusaLinkPrinter, log
 from .server import serve
 
 KINDS = {"prusalink": PrusaLinkPrinter, "moonraker": MoonrakerPrinter, "bambu": BambuPrinter}
-PLACEHOLDERS = {"192.168.x.y", "PRUSALINK-API-KEY", ""}
 
 
 def metrics_listener(host: str, port: int, by_ip: dict):
@@ -68,13 +67,12 @@ def main(argv=None):
     cfg = config.load(args.config)
     def _incomplete(pc: dict) -> bool:
         kind = pc.get("kind", "prusalink")
-        if str(pc.get("host", "")).strip() in PLACEHOLDERS:
+        if not filled(pc.get("host")):
             return True
         if kind == "prusalink":                 # the API key - or user + password (PrusaLink on a Raspberry Pi)
-            login = all(str(pc.get(k, "")).strip() not in PLACEHOLDERS | {"..."} for k in ("user", "password"))
-            return str(pc.get("api_key", "")).strip() in PLACEHOLDERS and not login
+            return not filled(pc.get("api_key")) and not (filled(pc.get("user")) and filled(pc.get("password")))
         if kind == "bambu":                     # the serial number and the LAN access code (printer screen)
-            return any(str(pc.get(k, "")).strip() in PLACEHOLDERS for k in ("serial", "access_code"))
+            return not all(filled(pc.get(k)) for k in ("serial", "access_code"))
         return False
     pending = [pc.get("id", "?") for pc in cfg.get("printer", []) if _incomplete(pc)]
     if pending or not cfg.get("printer"):

@@ -18,23 +18,26 @@
   `mk3s` and `mk3` (the *Printer* view shows the generic bed-slinger until `models/mk3s.glb` exists);
   an unknown 1.3.x type code is no longer taken for the MK3 – the job's printer model decides.
 * **Login with user and password** (HTTP digest, MD5-sess as PrusaLink on the Pi wants it) as an
-  alternative to the API key: `user` + `password` in the printer's block. PrintTwin never sends an
-  empty API key.
+  alternative to the API key: `user` + `password` in the printer's block (also a `\` in the user
+  name). PrintTwin never sends an empty API key; the examples' placeholders (`"..."`,
+  `PRUSALINK-API-KEY`) count as not filled in.
 * **Estimated position for printers without metrics:** PrusaLink on the Pi reports only Z every 2 s
   (z-hops included), the whole percent and the time left. The print is placed between the job's M73
-  marks inside the layer the printer is at – a z-hop doesn't mark layers printed, the estimate only
-  moves forward, stealth mode (M73 Q marks) is recognised by which marks fit the height. The HUD says
-  *estimated*. An MK4 that sends metrics behaves exactly as before; one that doesn't is estimated
-  too, with a hint to turn the metrics on.
-* Job files with a space in their path (PrusaLink's `PrusaLink gcodes` folder) download; a job on the
-  MK3's SD card (not downloadable) says so, takes the slicer hand-over when there is one and isn't
-  retried over the network.
+  marks inside the layer the printer is at – a z-hop doesn't mark layers printed (hop reports in a
+  row can't put it past the printer's next M73 mark), the estimate only moves forward, stealth mode
+  (M73 Q marks) is recognised by which marks fit the height. The HUD says *estimated*. An MK4 that
+  sends metrics behaves exactly as before; one that doesn't is estimated too, with a hint to turn
+  the metrics on.
+* Job files with a space in their path (PrusaLink's `PrusaLink gcodes` folder) or a `%` in their name
+  download; a job on the MK3's SD card (not downloadable) says so, takes the slicer hand-over when
+  there is one and isn't retried over the network.
 * PrusaLink answering 503 (the Pi runs, the printer isn't connected) shows *PrusaLink is up, the
   printer is not connected*; a refused login says so too. A job without id (PrusaLink just
-  restarted) is told apart by its file. Status `READY` and the Pi's storage list are fine.
+  restarted) is told apart by its file; a reprint of the same file starts over, also when the first
+  print had no id. Status `READY` and the Pi's storage list are fine.
 * Simulator: `tools/sim_printer.py --pi` (MK3S+ on PrusaLink 0.7.2) with `--stealth`, `--sd`,
-  `--digest`, `--no-printer`, `--no-id`, `--dir`; `tools/probe_api.py` logs in with user + password
-  too and takes a printer id.
+  `--digest`, `--no-printer`, `--no-id`, `--dir`, z-hop reports at random (`--zhop`, `--zhop-rate`,
+  `--seed`); `tools/probe_api.py` logs in with user + password too and takes a printer id.
 
 ## 0.7.1 – Bambu printers checked against Bambu's certificates
 

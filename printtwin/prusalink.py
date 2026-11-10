@@ -36,10 +36,14 @@ def split_host(host: str) -> tuple[str, str]:
     return netloc, ("/" + prefix.strip("/")) if prefix.strip("/") else ""
 
 
-def url_path(path: str) -> str:
+def url_path(path: str, verbatim: bool = False) -> str:
     """A file path as PrusaLink names it ("/api/files/local/PrusaLink gcodes/a b.gcode/raw") made
-    safe for the request line: spaces, '#', '?', non-ASCII and a lone '%' are percent-encoded
-    (http.client refuses a space; the printer decodes the path again). Escapes already there stay."""
+    safe for the request line (http.client refuses a space; the printer decodes the path again).
+    verbatim: the link is the file's path as it is (PrusaLink on a Pi never encodes it - in
+    "Ring%20holder.gcode" the '%' is the file's own), so everything but '/' is encoded. Otherwise
+    spaces, '#', '?', non-ASCII and a lone '%' are encoded, escapes already there stay."""
+    if verbatim:
+        return quote(str(path), safe="/")
     return quote(re.sub(r"%(?![0-9A-Fa-f]{2})", "%25", str(path)), safe="/:@!$&'()*+,;=~%")
 
 
@@ -106,8 +110,8 @@ class _Digest:
         else:
             resp = h(f"{ha1}:{nonce}:{ha2}")
 
-        def q(v):
-            return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+        def q(v):      # verbatim: PoorWSGI (PrusaLink) never unescapes, a '\' in a user name stays one
+            return '"' + str(v).replace('"', '\\"') + '"'       # ('"' isn't allowed in PrusaLink's user names)
         parts = [f"username={q(self.user)}", f"realm={q(realm)}", f"nonce={q(nonce)}", f"uri={q(uri)}",
                  f"response={q(resp)}"]
         if "algorithm" in ch:

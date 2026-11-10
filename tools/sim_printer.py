@@ -18,7 +18,8 @@ usage: python -I tools/sim_printer.py JOB.bgcode [--kbps 18] [--handover] [--por
 PrusaLink on a Raspberry Pi (MK3 / MK3S / MK3S+, what PrusaLink 0.7.2 answers):
   --pi        /api/version without "printer", with "original": "PrusaLink I3MK3S", api "0.9.0-legacy",
               text "PrusaLink 0.7.2"; status storage as a list, no axis_x/axis_y while printing, axis_z
-              only every 2 s (M155 auto-report) and now and then a z-hop above the layer (--zhop);
+              only every 2 s (M155 auto-report) and at random a z-hop above the layer (--zhop height,
+              --zhop-rate share of the reports, --seed);
               the M73 percent of the job (P marks), time left; no UDP metrics; the job file under
               /api/files/local/PrusaLink gcodes/<name>/raw (with the space); state FINISHED at the end
   --stealth   the printer is in stealth mode: it reports the M73 Q percent (silent marks)
@@ -44,6 +45,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import sys
@@ -134,6 +136,8 @@ def main():
     ap.add_argument("--digest", default=None, help="Pi: USER:PASSWORD for an HTTP digest login instead of a key")
     ap.add_argument("--nonce-ttl", type=float, default=60.0)
     ap.add_argument("--zhop", type=float, default=0.4, help="Pi: z-hop height in some of the 2 s Z reports")
+    ap.add_argument("--zhop-rate", type=float, default=0.33, help="Pi: share of the Z reports taken during a z-hop")
+    ap.add_argument("--seed", type=int, default=1, help="Pi: which z-hop reports (random, the same per seed)")
     ap.add_argument("--no-printer", type=float, default=0.0, help="Pi: 503 for the first S seconds")
     ap.add_argument("--no-id", type=float, default=0.0, help="Pi: no job id for the first S seconds")
     a = ap.parse_args()
@@ -197,10 +201,12 @@ def main():
                 "Q": pct(tp.silent_marks or tp.progress_marks), "done": False}
 
     def pi_report_z(now: float) -> float:
-        """axis_z as PrusaLink has it: the last M155 report (every 2 s), sometimes during a z-hop."""
+        """axis_z as PrusaLink has it: the last M155 report (every 2 s), during a z-hop at random
+        (--zhop-rate; reports in a row too, as on a real print), the same for every run of a --seed."""
         k = int((now - t_start) / REPORT_S)
         at = pi_print(t_start + k * REPORT_S)
-        hop = a.zhop if at["state"] == "PRINTING" and at["layer"] >= 0 and k % 3 == 1 else 0.0
+        in_hop = random.Random(a.seed * 1_000_003 + k).random() < a.zhop_rate
+        hop = a.zhop if at["state"] == "PRINTING" and at["layer"] >= 0 and in_hop else 0.0
         return round(at["z"] + hop, 2)
 
     class H(BaseHTTPRequestHandler):

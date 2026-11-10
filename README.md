@@ -99,8 +99,10 @@ id = "mk3s"
 name = "Prusa MK3S+"
 kind = "prusalink"
 host = "192.168.1.50:8080"    # the Pi's address (PrusaLink listens on 8080; Prusa's Pi image also on 80)
-api_key = "..."               # PrusaLink's web page: Settings -> API key ...
-# user = "..."                # ... or the user name and password you chose in PrusaLink's setup
+# either the API key (PrusaLink's web page: Settings -> API key) ...
+api_key = "..."
+# ... or the user name and password you chose in PrusaLink's setup (an API key wins when both are set)
+# user = "..."
 # password = "..."
 ```
 
@@ -355,7 +357,8 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
   `http://localhost:8791/p/sim`, host type PrusaLink, API key `sim` – *Upload and print*
   makes the upload the simulated job. `--pi` (or `--type 1.3.1`) makes it an MK3S+ with PrusaLink
   0.7.2 on a Raspberry Pi: `--stealth`, `--sd` (job on the SD card), `--digest USER:PASS` (digest
-  login instead of the key), `--no-printer S` (503: printer not connected), `--dir D` (one folder per
+  login instead of the key), `--no-printer S` (503: printer not connected), `--zhop MM` /
+  `--zhop-rate R` / `--seed N` (Z reports taken during a z-hop, at random), `--dir D` (one folder per
   simulator).
 * `python -I tools/sim_bambu.py JOB.gcode.3mf [--style p1|x1] [--internal] [--handover] [--pin]` – a
   simulated Bambu printer (TLS MQTT + FTPS, needs the openssl tool) plus the bridge on port 8796.

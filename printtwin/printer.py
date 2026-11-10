@@ -26,6 +26,7 @@ from collections import deque
 from pathlib import Path
 
 from . import incoming, models
+from .config import filled
 from .metrics import parse_datagram
 from .prusalink import PrusaLink, split_host, url_path
 from .toolpath import JobDecoder, JobFileError, load_file
@@ -561,15 +562,16 @@ class PrusaLinkPrinter(BasePrinter):
     while printing - only Z every 2 s (the planned Z, z-hops included), the whole M73 percent and the
     time left. Without metrics the place in the toolpath is estimated (_estimate_now): the layers
     below the Z of the last polls are done (a z-hop doesn't count), the percent says between which
-    M73 marks of the job the print is, and the time since it changed says how far."""
+    M73 marks of the job the print is (never past the next one), and the time since it changed says
+    how far."""
     kind = "prusalink"
 
     def __init__(self, cfg: dict, cache_dir: Path, incoming_dir: Path = incoming.INCOMING):
         super().__init__(cfg, cache_dir, incoming_dir)
-        key = str(cfg.get("api_key") or "").strip()
-        if key == "PRUSALINK-API-KEY":                # the example's placeholder: no key
-            key = ""
-        user, password = str(cfg.get("user") or "").strip(), str(cfg.get("password") or "")
+        # the examples' placeholders ("PRUSALINK-API-KEY", "...") are no key, no user, no password
+        key = str(cfg.get("api_key")).strip() if filled(cfg.get("api_key")) else ""
+        user = str(cfg.get("user")).strip() if filled(cfg.get("user")) else ""
+        password = str(cfg.get("password")) if filled(cfg.get("password")) else ""
         if not key and not (user and password):
             raise ValueError("no api_key (or user and password) in its [[printer]] block")
         self.client = PrusaLink(self.host, key, user=user or None, password=password or None)
@@ -653,15 +655,15 @@ class PrusaLinkPrinter(BasePrinter):
         jid, old = jb.get("id"), self.job
         if old and jid is not None and old.get("id") == jid:
             return None
-        restarted = False
+        # a fresh start (after the end, or the percent drops): another print, even of the same file -
+        # also when the last print had no id and this one has
+        restarted = bool(old) and ((state == "PRINTING" and prev_state in ("FINISHED", "STOPPED", "IDLE", "READY")) or (
+            progress is not None and prev_progress is not None and progress < prev_progress - 5))
         if jid is None:
             # no job id (PrusaLink just restarted): its file - or a fresh start - tells whether it's another print
             now = time.time()
-            if old:
-                restarted = (state == "PRINTING" and prev_state in ("FINISHED", "STOPPED", "IDLE", "READY")) or (
-                    progress is not None and prev_progress is not None and progress < prev_progress - 5)
-                if not restarted and now < self._noid_at:
-                    return None
+            if old and not restarted and now < self._noid_at:
+                return None
             self._noid_at = now + NOID_CHECK_S
         code, job = self.client.get_json("/api/v1/job")
         if code != 200 or not job or not job.get("file"):
@@ -682,8 +684,8 @@ class PrusaLinkPrinter(BasePrinter):
         return None if job.get("download") else SD_JOB
 
     def _stream(self, job: dict, on_chunk):
-        # PrusaLink on a Pi: "/api/files/local/PrusaLink gcodes/<name>/raw" - with a space
-        self.client.stream(url_path(job["download"]), on_chunk)
+        # PrusaLink on a Pi: "/api/files/local/PrusaLink gcodes/<name>/raw" - with a space, never encoded
+        self.client.stream(url_path(job["download"], verbatim=self.pi), on_chunk)
 
     # ---------------------------------------------------------------- estimate
     def _observe(self, data: dict):
@@ -769,6 +771,9 @@ class PrusaLinkPrinter(BasePrinter):
         p = float(lo_z)
         if use in wins:
             lo, hi = wins[use]
+            # the next mark caps the Z bounds too: hops that look like a layer (a layer multiple, in
+            # several polls in a row) can't put the print past what the percent says
+            lo_z, hi_z = min(lo_z, hi), min(hi_z, hi)
             left = 100.0 - pct
             per_pct = est.remaining / left if est.remaining and left > 0 else None
             frac = min(0.999, est.run / per_pct) if per_pct and pct > 0 else 0.0
