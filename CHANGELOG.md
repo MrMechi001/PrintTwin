@@ -10,12 +10,20 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
-## Unreleased
+## 0.8.0 – Original Prusa MK3 / MK3S / MK3S+
 
+* **True-to-size MK3S+ model** (`web/models/mk3s.glb`) in the *Printer* view: the flat frame from
+  Prusa's drawings, Prusa's MK3S / MK3S+ printed parts (orange PETG, black extruder body), motors,
+  belts, hotend, SuperPINDA, fans, Einsy box, PSU and the 20 × 4 character LCD showing the job,
+  filament from the spool on top of the frame. Built by `tools/cad/build_mk3s.py` (GPL-2.0, sources
+  in `web/models/NOTICE.md`). Bed-stack and plate thicknesses are still to be measured on a real
+  printer. The MK3 (non-S) is shown with it, marked approximate.
+* Viewer: a character-LCD style (20 × 4), a spool turning about any axis, the extruder cable's
+  shape and thickness from the model.
 * **Original Prusa MK3 / MK3S / MK3S+** with PrusaLink on a Raspberry Pi (PrusaLink 0.7 / 0.8, tested
   against a simulated PrusaLink 0.7.2): the printer type from PrusaLink's `original` field
   (`PrusaLink I3MK3S` → MK3S / MK3S+, `I3MK3` → MK3, MK2.5/S → generic bed-slinger), new model keys
-  `mk3s` and `mk3` (the *Printer* view shows the generic bed-slinger until `models/mk3s.glb` exists);
+  `mk3s` and `mk3`;
   an unknown 1.3.x type code is no longer taken for the MK3 – the job's printer model decides.
 * **Login with user and password** (HTTP digest, MD5-sess as PrusaLink on the Pi wants it) as an
   alternative to the API key: `user` + `password` in the printer's block (also a `\` in the user
@@ -25,7 +33,9 @@
   (z-hops included), the whole percent and the time left. The print is placed between the job's M73
   marks inside the layer the printer is at – a z-hop doesn't mark layers printed (hop reports in a
   row can't put it past the printer's next M73 mark), the estimate only moves forward, stealth mode
-  (M73 Q marks) is recognised by which marks fit the height. The HUD says *estimated*. An MK4 that
+  (M73 Q marks) is recognised by which marks fit the height – the height counts only after three Z
+  reports and the mode changes only on a clear lead, so a z-hop at the start can't make it jump
+  ahead. The HUD says *estimated*. An MK4 that
   sends metrics behaves exactly as before; one that doesn't is estimated too, with a hint to turn
   the metrics on.
 * Job files with a space in their path (PrusaLink's `PrusaLink gcodes` folder) or a `%` in their name

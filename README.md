@@ -24,13 +24,13 @@ PrintTwin started on the Original Prusa MK4 – **support for more printers is i
 | **Original Prusa MK4S** | PrusaLink + firmware metrics | 🧪 should work today (same firmware) – **testers wanted**; true-to-size 3D model |
 | Original Prusa MK3.9 / MK3.9S | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; shown as the MK4 / MK4S (approximate) |
 | Original Prusa MINI / MINI+ | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; true-to-size 3D model |
-| Original Prusa MK3 / MK3S / MK3S+ | PrusaLink on a Raspberry Pi | 🧪 new – tested against a simulated PrusaLink 0.7.2, **testers wanted**; position *estimated* from Z and progress (PrusaLink reports no nozzle position); SD-card jobs need the slicer hand-over or PrintTwin as print host; generic bed-slinger model until the MK3S+ model is done |
+| Original Prusa MK3 / MK3S / MK3S+ | PrusaLink on a Raspberry Pi | 🧪 new – tested against a simulated PrusaLink 0.7.2, **testers wanted**; position *estimated* from Z and progress (PrusaLink reports no nozzle position); SD-card jobs need the slicer hand-over or PrintTwin as print host; true-to-size MK3S+ model (flat frame) |
 | Original Prusa XL | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; 3D model with Prusa's parts, frame estimated (approximate) |
 | Prusa CORE One / CORE One L | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY model until their own is done |
 | **Klipper printers** (Voron 2.4 / Trident / V0, Sovol SV08, RatRig, Creality K1, Qidi, Elegoo, … – anything with Moonraker) | Moonraker | 🧪 new – tested against a simulated Moonraker, **testers wanted**; generic CoreXY (bed or flying gantry) or bed-slinger model |
 | OctoPrint printers (Ender 3 …) | OctoPrint API | 📋 planned |
 | **Bambu Lab** (X1, P1, P2S, X2D, A1, A1 mini, A2L, H2D/H2S/H2C) | MQTT + FTPS on the local network (read-only) | 🧪 new – tested against a simulated printer, **testers wanted**; position *estimated* from layer and progress (Bambu printers report no nozzle position); generic CoreXY / bed-slinger model |
-| True-to-size models for the *Printer* view: MK3S+, CORE One, CORE One L; the XL refined | – | 📋 planned |
+| True-to-size models for the *Printer* view: CORE One, CORE One L, Bambu Lab; the XL refined | – | 📋 planned |
 
 PrintTwin asks the printer which model it is (PrusaLink), so the *Printer* view picks the
 right one by itself; `model = "mk4s"` in the config overrides it. Klipper doesn't know its
@@ -115,8 +115,8 @@ api_key = "..."
   PrintTwin as the print host – then PrintTwin has the file. Jobs uploaded to the Pi (PrusaSlicer,
   Prusa Connect) are downloaded as usual. The MK3 prints plain `.gcode` (no `.bgcode`).
 * **Model:** PrintTwin reads the printer type from PrusaLink (`PrusaLink I3MK3S` → MK3S / MK3S+, the
-  same type code for both). The *Printer* view shows the generic bed-slinger until the true-to-size
-  MK3S+ model is done.
+  same type code for both). The *Printer* view shows the true-to-size MK3S+ (the MK3 with it, marked
+  approximate).
 * **Printer somewhere else** (workshop, another network): PrintTwin needs to reach the Pi's address –
   use a VPN such as Tailscale on the PC and the Pi and put the Pi's Tailscale address into `host`.
   Don't forward PrusaLink's port on your router.

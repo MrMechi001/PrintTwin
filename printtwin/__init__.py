@@ -1,2 +1,2 @@
 """PrintTwin - live 3D view of what a 3D printer is printing."""
-__version__ = "0.7.1"
+__version__ = "0.8.0"
