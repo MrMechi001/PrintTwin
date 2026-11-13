@@ -10,7 +10,7 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
-## Unreleased
+## 0.8.1 – Prints sent via Prusa Connect
 
 * **Prints sent via Prusa Connect** (opt-in, unofficial): the printer doesn't hand out their file
   while printing, so PrintTwin downloads it from Prusa Connect (`[connect] enabled = true`, sign in
