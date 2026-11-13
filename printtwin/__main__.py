@@ -58,6 +58,8 @@ Then start PrintTwin again.
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="printtwin", description="Live 3D view of what a 3D printer is printing.")
+    ap.add_argument("command", nargs="?", choices=["connect-login"],
+                    help="connect-login: sign in to Prusa Connect (for prints sent via Prusa Connect)")
     ap.add_argument("--config", type=Path, help="config file (default: config.local.toml next to run.py)")
     ap.add_argument("--open", action="store_true", help="open the viewer in the browser once the server runs")
     ap.add_argument("--version", action="version", version=f"PrintTwin {__version__}")
@@ -65,6 +67,13 @@ def main(argv=None):
     if args.config is None and first_run(config.DEFAULT_CONFIG):
         sys.exit(1)
     cfg = config.load(args.config)
+    if args.command == "connect-login":
+        from . import connect
+        try:
+            connect.login(cfg["connect"]["tokens"])
+        except (connect.ConnectError, KeyboardInterrupt, EOFError) as e:
+            sys.exit(f"Not signed in: {e}")
+        return
     def _incomplete(pc: dict) -> bool:
         kind = pc.get("kind", "prusalink")
         if not filled(pc.get("host")):
@@ -93,6 +102,16 @@ def main(argv=None):
             printers[pc["id"]] = cls(pc, cache, handover)
         except (KeyError, ValueError) as e:
             log(f"skipping printer {pc.get('id')}: {e}")
+    if cfg["connect"]["enabled"]:
+        from . import connect
+        try:
+            cn = connect.Connect(cfg["connect"]["tokens"])
+            for p in printers.values():
+                if p.kind == "prusalink":
+                    p.connect = cn
+            log("Prusa Connect: on (jobs the printer doesn't hand out come from Prusa Connect)")
+        except connect.ConnectError as e:
+            log(f"Prusa Connect: {e}")
     by_ip = {}
     for p in printers.values():
         if not hasattr(p, "on_datagram"):           # UDP firmware metrics: Prusa printers only

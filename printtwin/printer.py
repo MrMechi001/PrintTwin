@@ -577,6 +577,8 @@ class PrusaLinkPrinter(BasePrinter):
         if not key and not (user and password):
             raise ValueError("no api_key (or user and password) in its [[printer]] block")
         self.client = PrusaLink(self.host, key, user=user or None, password=password or None)
+        self.connect = None                # Prusa Connect (opt-in): the file of a job the printer won't hand out
+        self._connect_said = None
         self.pi = False                    # PrusaLink on a Raspberry Pi (no "printer" in /api/version)
         self.metrics_seen = False          # a file or nozzle position arrived over UDP
         self.estimated = True              # ... until then the position is estimated
@@ -687,7 +689,22 @@ class PrusaLinkPrinter(BasePrinter):
 
     def _stream(self, job: dict, on_chunk):
         # PrusaLink on a Pi: "/api/files/local/PrusaLink gcodes/<name>/raw" - with a space, never encoded
-        self.client.stream(url_path(job["download"], verbatim=self.pi), on_chunk)
+        try:
+            self.client.stream(url_path(job["download"], verbatim=self.pi), on_chunk)
+        except urllib.error.HTTPError as e:
+            # a job sent via Prusa Connect isn't handed out while it prints: Connect has the file
+            if e.code != 404 or self.connect is None:
+                raise
+            from .connect import ConnectError
+            try:
+                team, file_hash, name = self.connect.find_job(job)
+                log(self.id, f"job file from Prusa Connect: {name}")
+                self.connect.stream(team, file_hash, on_chunk)
+            except ConnectError as ce:
+                if self._connect_said != str(ce):
+                    self._connect_said = str(ce)
+                    log(self.id, str(ce))
+                raise e from None                   # as before: the printer's 404, retried later
 
     # ---------------------------------------------------------------- estimate
     def _observe(self, data: dict):

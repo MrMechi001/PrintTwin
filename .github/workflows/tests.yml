@@ -26,6 +26,8 @@ jobs:
         run: python -I tests/test_bridge.py
       - name: MK3 / MK3S+ with PrusaLink on a Raspberry Pi (simulated) + MK4 live metrics
         run: python -I tests/test_mk3.py
+      - name: Prusa Connect fallback (fake Connect server)
+        run: python -I tests/test_connect.py
       - name: Slicer print host
         run: python -I tests/test_slicerhost.py
       - name: Klipper / Moonraker end-to-end (simulated printer)

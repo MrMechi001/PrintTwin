@@ -25,4 +25,9 @@ def load(path: Path | None = None) -> dict:
     cfg.setdefault("slicer", {})
     v = cfg["slicer"].get("print_host", False)          # only an explicit yes turns it on
     cfg["slicer"]["print_host"] = v is True or str(v).strip().lower() in ("true", "yes", "on", "1")
+    cfg.setdefault("connect", {})                       # Prusa Connect: off unless an explicit yes
+    v = cfg["connect"].get("enabled", False)
+    cfg["connect"]["enabled"] = v is True or str(v).strip().lower() in ("true", "yes", "on", "1")
+    tokens = Path(cfg["connect"].get("tokens") or "connect.local.json")
+    cfg["connect"]["tokens"] = tokens if tokens.is_absolute() else Path(path or DEFAULT_CONFIG).resolve().parent / tokens
     return cfg

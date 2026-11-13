@@ -231,10 +231,32 @@ The hook only copies the file to `incoming/` (it never changes or blocks an expo
 problems go to `logs/hook.log`). Without it PrintTwin still works – the model then builds
 up while the file downloads.
 
+### Optional: prints sent via Prusa Connect (unofficial)
+
+An MK4 / MK3.9 / CORE One / XL / MINI doesn't hand out the file of a print that came via
+Prusa Connect while it prints it (the viewer then shows only the live nozzle). Prusa Connect
+keeps that file: signed in with your Prusa account, PrintTwin downloads it from there instead
+– the model is there seconds after the start, also for prints started from the phone or
+another computer. Off by default. Sign in once:
+
+```
+python run.py connect-login
+```
+
+You sign in on Prusa's own page (PrintTwin never sees the password); the browser then passes
+`connect.prusa3d.com/login/auth-callback?code=…` and Prusa Connect moves on at once – copy that
+address from the browser history (Ctrl+H) and paste it into the window within a minute. Then
+`[connect] enabled = true` in `config.local.toml` and restart PrintTwin. The sign-in tokens are
+kept in `connect.local.json` next to the config (keep it private; renewed on every use, valid
+about 30 days unused). PrintTwin only reads the printer list and the job's file. These are the
+calls Prusa Connect's own web page makes, not a published API – Prusa may change them.
+
 ## Security & privacy
 
 * PrintTwin only **reads** from the printer (status, job file, metrics). It cannot start,
   stop or change anything on its own.
+* Prusa Connect (`[connect] enabled = true`, off by default): only the printer list and the job
+  file are read; the sign-in tokens stay in `connect.local.json` on your computer.
 * As the slicer's print host (`[slicer] print_host = true`, off by default) it passes the
   slicer's calls on to the printer – with the key the slicer sends, never with its own. Without
   the printer's API key nobody can upload or print through it. Bambu printers are only read:

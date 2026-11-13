@@ -50,3 +50,11 @@ listen_port = 8514
 # hostname http://<this PC's IP>:8790/p/<printer id>, API key = the printer's PrusaLink key.
 # PrintTwin passes each call on unchanged with the slicer's key; it adds no credentials itself.
 print_host = false
+
+[connect]
+# Optional, unofficial: a print sent via Prusa Connect isn't handed out by the MK4 / CORE One / XL /
+# MINI while it prints (no model, only the live nozzle). With your Prusa account PrintTwin then
+# downloads the job's file from Prusa Connect instead. Sign in once:  python run.py connect-login
+# (on Prusa's own page - PrintTwin never sees the password; the sign-in tokens are kept in
+# connect.local.json next to this file, keep it private). Read-only: the printer list and the file.
+enabled = false

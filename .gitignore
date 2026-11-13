@@ -1,4 +1,6 @@
 config.local.toml
+connect.local.json
+connect.local.json.tmp
 pyenv/
 cache/
 incoming/

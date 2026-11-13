@@ -10,6 +10,13 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
+## Unreleased
+
+* **Prints sent via Prusa Connect** (opt-in, unofficial): the printer doesn't hand out their file
+  while printing, so PrintTwin downloads it from Prusa Connect (`[connect] enabled = true`, sign in
+  once with `python run.py connect-login` on Prusa's own page – PrintTwin never sees the password;
+  the tokens stay in `connect.local.json`). Only the printer list and the job file are read.
+
 ## 0.8.0 – Original Prusa MK3 / MK3S / MK3S+
 
 * **True-to-size MK3S+ model** (`web/models/mk3s.glb`) in the *Printer* view: the flat frame from
