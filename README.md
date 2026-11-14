@@ -62,6 +62,11 @@ independent project, not affiliated with Prusa Research.
 * **Any slicer**: `.bgcode` and `.gcode` from PrusaSlicer, OrcaSlicer, Bambu Studio,
   SuperSlicer and Cura.
 * **Phone & tablet**: the *Phone* button shows a QR code; anyone on your Wi-Fi can watch.
+* **Timelapse** (button *Timelapse*): *Replay* lets the print grow from the first layer up to now
+  (or to its end) in 15 s – 2 min, the head parked beside it; *Live* is the live print for screen
+  recordings. The camera circles the build plate (the printer in the *Printer* view) or stays
+  put; a replay can be saved as a video (MP4 in Chrome / Edge, else WebM), and *Hide the panels*
+  leaves only the 3D view. Esc stops.
 * **Nothing to install** but Python 3.11+: no packages, no cloud, no account.
 
 ## Quick start

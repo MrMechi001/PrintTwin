@@ -10,6 +10,12 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
+## Unreleased
+
+* **Timelapse** (button *Timelapse*): replay the print from the first layer in 15 s – 2 min or
+  watch it live, with the camera circling the build plate / printer or fixed; save the replay as
+  a video (MP4 or WebM) and hide the panels for clean recordings.
+
 ## 0.8.1 – Prints sent via Prusa Connect
 
 * **Prints sent via Prusa Connect** (opt-in, unofficial): the printer doesn't hand out their file

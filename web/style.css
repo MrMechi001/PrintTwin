@@ -81,7 +81,40 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   background: rgba(255,255,255,.06); color: var(--text); cursor: pointer; }
 #phoneClose:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+#lapse {
+  position: fixed; right: 16px; bottom: 66px; width: 270px; display: grid; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px;
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-size: 13px;
+}
+#lapse[hidden], #lapse [hidden], #lpStop[hidden] { display: none !important; }
+#lapse h2 { margin: 0; font-size: 14px; font-weight: 650; }
+#lapse .seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+#lapse .seg label { position: relative; text-align: center; cursor: pointer; }
+#lapse .seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+#lapse .seg span { display: block; padding: 7px 0; color: var(--muted); }
+#lapse .seg input:checked + span { background: rgba(255,138,42,.2); color: #ffd9b8; }
+#lapse .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+#lapse .opt { display: flex; justify-content: space-between; align-items: center; gap: 10px; color: var(--muted); }
+#lapse select { font: inherit; color: var(--text); background: rgba(255,255,255,.06); border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 8px; }
+#lapse .chk { display: flex; align-items: center; gap: 8px; color: var(--muted); cursor: pointer; }
+#lapse .chk input { accent-color: var(--accent); margin: 0; }
+#lapse .go { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+#lpStatus { font-size: 12px; }
+#lpGo, #lpStop { font: inherit; font-size: 13px; color: #ffd9b8; background: rgba(255,138,42,.2);
+  border: 1px solid rgba(255,138,42,.75); border-radius: 10px; padding: 8px 16px; cursor: pointer; }
+#lpGo:focus-visible, #lpStop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#lpStop { position: fixed; right: 16px; bottom: 16px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  transition: opacity .6s; }
+/* timelapse running: the panel steps aside; "Hide the panels" leaves only the 3D view (the Stop button fades out) */
+body.lapse-run #lapse, body.lapse-run #tools { display: none; }
+body.lapse-clean #hud, body.lapse-clean #legend { display: none !important; }
+body.lapse-clean.idle #lpStop { opacity: 0; pointer-events: none; }
+body.lapse-clean.idle, body.lapse-clean.idle #view { cursor: none; }
+
 @media (max-width: 640px) {
+  #lapse { left: 12px; right: 12px; bottom: 62px; width: auto; }
+  #lpStop { right: 12px; bottom: 12px; }
   #bPhone { display: none; }
   #hud { top: 12px; left: 12px; right: 12px; width: auto; max-width: none; padding: 12px 14px; }
   .row.big #pct { font-size: 19px; }

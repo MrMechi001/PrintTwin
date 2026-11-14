@@ -756,6 +756,162 @@ $('bPhone').addEventListener('click', async () => {
 });
 $('phoneClose').addEventListener('click', () => $('phone').close());
 
+// ------------------------------------------------------------------ timelapse
+// Replay: the print grows from the first layer up to now (or to its end) in a set time, the head
+// parked beside it like a printer's smooth timelapse. Live: the live print as it is (for screen
+// recordings). The camera circles the build plate - the printer in the Printer view - or stays
+// put; a replay can be saved as a video of the 3D view (MediaRecorder on the canvas).
+const lapse = { mode: 'replay', cam: 'orbit', len: 30, turn: 300, range: 'now', rec: false, clean: false };
+{
+  const p = prefs.lapse || {};
+  if (['replay', 'live'].includes(p.mode)) lapse.mode = p.mode;
+  if (['orbit', 'fixed'].includes(p.cam)) lapse.cam = p.cam;
+  if ([15, 30, 60, 120].includes(p.len)) lapse.len = p.len;
+  if ([60, 300, 900, 1800].includes(p.turn)) lapse.turn = p.turn;
+  if (['now', 'all'].includes(p.range)) lapse.range = p.range;
+  lapse.rec = p.rec === true;
+  lapse.clean = p.clean === true;
+}
+const run = { on: false, t0: 0, cumEnd: 0, key: null, endAt: 0, recorder: null };
+let liveCount = null, dragging = false, idleTimer = 0;
+controls.addEventListener('start', () => { dragging = true; });
+controls.addEventListener('end', () => { dragging = false; });
+const lapsePanel = $('lapse'), bLapse = $('bLapse'), lpStop = $('lpStop'), lpStatus = $('lpStatus');
+const radios = (name) => [...lapsePanel.querySelectorAll(`input[name="${name}"]`)];
+const isPrinting = () => state?.state === 'PRINTING' || state?.state === 'PAUSED';
+
+function lapseUi() {
+  radios('lpMode').forEach((r) => { r.checked = r.value === lapse.mode; });
+  radios('lpCam').forEach((r) => { r.checked = r.value === lapse.cam; });
+  $('lpLen').value = String(lapse.len);
+  $('lpTurn').value = String(lapse.turn);
+  $('lpRange').value = lapse.range;
+  $('lpRec').checked = lapse.rec;
+  $('lpClean').checked = lapse.clean;
+  for (const el of lapsePanel.querySelectorAll('[data-for]')) {
+    el.hidden = el.dataset.for === 'replay' ? lapse.mode !== 'replay' : !(lapse.mode === 'live' && lapse.cam === 'orbit');
+  }
+  if (!isPrinting()) $('lpRangeRow').hidden = true;          // finished / idle: always the whole print
+  if (!window.MediaRecorder || !canvas.captureStream) $('lpRec').closest('label').hidden = true;
+}
+lapsePanel.addEventListener('change', () => {
+  lapse.mode = radios('lpMode').find((r) => r.checked)?.value || 'replay';
+  lapse.cam = radios('lpCam').find((r) => r.checked)?.value || 'orbit';
+  lapse.len = Number($('lpLen').value);
+  lapse.turn = Number($('lpTurn').value);
+  lapse.range = $('lpRange').value;
+  lapse.rec = $('lpRec').checked;
+  lapse.clean = $('lpClean').checked;
+  prefs.lapse = { ...lapse };
+  savePrefs();
+  lapseUi();
+});
+bLapse.addEventListener('click', () => {
+  lapsePanel.hidden = !lapsePanel.hidden;
+  bLapse.setAttribute('aria-pressed', String(!lapsePanel.hidden));
+  if (!lapsePanel.hidden) { lpStatus.textContent = ''; lapseUi(); }
+});
+$('lpGo').addEventListener('click', startLapse);
+lpStop.addEventListener('click', () => stopLapse());
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && run.on) stopLapse(); });
+// "Hide the panels": the Stop button fades out while the mouse rests, comes back when it moves
+function wake() {
+  document.body.classList.remove('idle');
+  clearTimeout(idleTimer);
+  if (run.on) idleTimer = setTimeout(() => document.body.classList.add('idle'), 2000);
+}
+addEventListener('pointermove', wake);
+addEventListener('pointerdown', wake);
+
+// world XY the camera circles: the printer in the Printer view, else the print (or the plate)
+function orbitCentre() {
+  if (printerMode && printer) {
+    const b = printer.bounds;
+    return [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2];
+  }
+  const bb = tp?.n ? tp.info?.bbox : null;
+  return bb ? [(bb[0] + bb[3]) / 2, (bb[1] + bb[4]) / 2] : [(bedBox.x0 + bedBox.x1) / 2, (bedBox.y0 + bedBox.y1) / 2];
+}
+
+// head parked at the right edge, the bed centred, just above the layer printed last
+function parkPose(count) {
+  const li = layerAt(count);
+  return [bedBox.x1, (bedBox.y0 + bedBox.y1) / 2, (li >= 0 ? tp.info.layers[li][0] : 0) + 1];
+}
+
+function startLapse() {
+  if (run.on) return;
+  if (lapse.mode === 'replay') {
+    if (!tp?.n) { lpStatus.textContent = 'No toolpath yet'; return; }
+    const upToNow = lapse.range === 'now' && isPrinting() && liveCount >= 1;
+    run.cumEnd = cumAt(upToNow ? Math.min(liveCount, tp.n) : tp.n);
+    run.key = tp.key;
+    run.endAt = 0;
+  }
+  if (lapse.cam === 'orbit') {
+    const [cx, cy] = orbitCentre(), d = new THREE.Vector3(cx - controls.target.x, cy - controls.target.y, 0);
+    controls.target.add(d);
+    camera.position.add(d);
+  }
+  run.on = true;
+  run.t0 = performance.now();
+  document.body.classList.add('lapse-run');
+  document.body.classList.toggle('lapse-clean', lapse.clean);
+  lpStop.hidden = false;
+  lpStatus.textContent = '';
+  wake();
+  if (lapse.mode === 'replay' && lapse.rec) {
+    try { run.recorder = startRecording(); } catch (e) { lpStatus.textContent = `No video: ${e.message}`; }
+  }
+}
+
+function stopLapse() {
+  if (!run.on) return;
+  run.on = false;
+  if (run.recorder && run.recorder.state !== 'inactive') run.recorder.stop();
+  run.recorder = null;
+  document.body.classList.remove('lapse-run', 'lapse-clean', 'idle');
+  clearTimeout(idleTimer);
+  lpStop.hidden = true;
+}
+
+// The 3D view as a video: MP4 (H.264) where the browser records it, else WebM. Recorded at an even
+// size of at most 1920 px on the long side (what video players and encoders expect).
+function startRecording() {
+  const type = ['video/mp4;codecs=avc1.640033', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+    .find((t) => MediaRecorder.isTypeSupported(t));
+  if (!type) throw new Error('this browser cannot record the view');
+  const pr = renderer.getPixelRatio(), w = window.innerWidth, h = window.innerHeight;
+  const k = Math.min(1, 1920 / (Math.max(w, h) * pr));
+  const even = (v) => Math.max(2, 2 * Math.round(v / 2));
+  renderer.setDrawingBufferSize(even(w * pr * k), even(h * pr * k), 1);
+  const stream = canvas.captureStream(60);
+  const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 6e6 });
+  const chunks = [];
+  const ext = type.startsWith('video/mp4') ? 'mp4' : 'webm';
+  const name = `${(state?.job?.name || 'print').replace(/\.(gcode\.3mf|bgcode|gcode|3mf)$/i, '').replace(/[^\w.-]+/g, '_')}-timelapse.${ext}`;
+  const restore = () => { renderer.setPixelRatio(pr); resize(); };
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  rec.onerror = (e) => { lpStatus.textContent = `Video failed: ${e.error?.message || 'recorder error'}`; };
+  rec.onstop = () => {
+    stream.getTracks().forEach((t) => t.stop());
+    restore();
+    if (!chunks.length) return;
+    const blob = new Blob(chunks, { type: type.split(';')[0] });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    lpStatus.textContent = `Saved ${name} (${(blob.size / 1e6).toFixed(1)} MB)`;
+    window.printtwin.lastVideo = blob;
+  };
+  rec.start(500);
+  return rec;
+}
+
 // ------------------------------------------------------------------ frame loop
 let lastFrame = performance.now(), lastHud = 0;
 const tmpV = new THREE.Vector3();
@@ -801,6 +957,24 @@ function frame(now) {
     count = state.printed;
     nz = state.nozzle;
   }
+  liveCount = count;
+  const replaying = run.on && lapse.mode === 'replay' && tp?.key === run.key;
+  if (run.on && lapse.mode === 'replay' && !replaying) stopLapse();      // a new job meanwhile
+  if (replaying) {
+    const f = Math.min(1, (now - run.t0) / (lapse.len * 1000));
+    count = countAtCum(run.cumEnd * f);
+    nz = null;
+    if (f >= 1) {                                // hold the finished frame a moment, then back to live
+      run.endAt ||= now;
+      if (now - run.endAt > 1500) stopLapse();
+    }
+  }
+  if (run.on && lapse.cam === 'orbit' && !dragging) {
+    const a = (2 * Math.PI * dt) / ((lapse.mode === 'replay' ? lapse.len : lapse.turn) * 1000);
+    const ox = camera.position.x - controls.target.x, oy = camera.position.y - controls.target.y;
+    camera.position.x = controls.target.x + ox * Math.cos(a) - oy * Math.sin(a);
+    camera.position.y = controls.target.y + ox * Math.sin(a) + oy * Math.cos(a);
+  }
   if (tp && count != null) {
     uCount.value = count;
     const n = tp.n;
@@ -812,7 +986,7 @@ function frame(now) {
   if (printerMode && printer) {
     nozzle.visible = false;
     // pose: live nozzle while printing, else the idle axes PrusaLink reports
-    let pose = printing && nz ? nz : null;
+    let pose = replaying ? parkPose(count) : printing && nz ? nz : null;
     if (!pose && printing && tp?.n && count != null) {
       // no nozzle metrics (layer-only mode): put the head where the toolpath says it is
       const j = 3 * Math.min(Math.max(Math.floor(count), 0), tp.n - 1);
@@ -834,7 +1008,7 @@ function frame(now) {
       printer.setActiveTool?.(toolAt(Math.min(Math.floor(uCount.value), Math.max(tp.n - 1, 0))));
     }
     printer.tick(dt / 1000);
-    if (follow && pose) {
+    if (follow && pose && !run.on) {
       printer.nozzleWorld(tmpV).sub(controls.target).multiplyScalar(0.06);
       controls.target.add(tmpV);
       camera.position.add(tmpV);
@@ -844,7 +1018,7 @@ function frame(now) {
     if (nozzle.visible) {
       nozzle.position.set(nz[0], nz[1], nz[2]);
       nozzle.userData.glow.intensity = state.state === 'PRINTING' ? 900 : 0;
-      if (follow) {
+      if (follow && !run.on) {
         tmpV.set(nz[0], nz[1], nz[2]).sub(controls.target).multiplyScalar(0.06);
         controls.target.add(tmpV);
         camera.position.add(tmpV);
