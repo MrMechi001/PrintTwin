@@ -1,4 +1,4 @@
-"""Run the PrintTwin bridge:  python run.py [--config file.toml] [--open]"""
+"""Run the PrintTwin bridge:  python run.py [--config file.toml] [--open] [--until-done]"""
 from __future__ import annotations
 
 import argparse
@@ -6,6 +6,7 @@ import shutil
 import socket
 import sys
 import threading
+import time
 import tomllib
 import webbrowser
 from pathlib import Path
@@ -18,6 +19,31 @@ from .printer import PrusaLinkPrinter, log
 from .server import serve
 
 KINDS = {"prusalink": PrusaLinkPrinter, "moonraker": MoonrakerPrinter, "bambu": BambuPrinter}
+BUSY = {"PRINTING", "PAUSED", "BUSY", "ATTENTION"}     # a print runs (or waits for the user)
+
+
+def watch_until_done(printers: dict, stop, linger: float = 600.0, wait: float = 1800.0, poll: float | None = None,
+                     clock=time.monotonic, sleep=time.sleep):
+    """--until-done (the slicer hook started PrintTwin for a job it sent): call stop() `linger` s
+    after the last print ended - or `wait` s after the start if no print begins at all."""
+    poll = poll or min(5.0, max(0.2, min(linger, wait) / 5))
+    last = clock()
+    seen = False
+    while True:
+        sleep(poll)
+        now = clock()
+        try:
+            busy = any(p.snapshot().get("state") in BUSY for p in printers.values())
+        except Exception as e:                  # never let a bad snapshot stop PrintTwin early
+            log(f"until-done: {e!r}")
+            busy = True
+        if busy:
+            seen, last = True, now
+        elif now - last >= (linger if seen else wait):
+            log("the print is done - PrintTwin stops (the slicer started it)" if seen else
+                f"no print started within {wait / 60:g} min - PrintTwin stops (the slicer started it)")
+            stop()
+            return
 
 
 def metrics_listener(host: str, port: int, by_ip: dict):
@@ -67,6 +93,8 @@ def main(argv=None):
                     help="connect-login: sign in to Prusa Connect (for prints sent via Prusa Connect)")
     ap.add_argument("--config", type=Path, help="config file (default: config.local.toml next to run.py)")
     ap.add_argument("--open", action="store_true", help="open the viewer in the browser once the server runs")
+    ap.add_argument("--until-done", action="store_true",
+                    help="stop by itself after the print (how the slicer hook starts PrintTwin)")
     ap.add_argument("--version", action="version", version=f"PrintTwin {__version__}")
     args = ap.parse_args(argv)
     if args.config is None and first_run(config.DEFAULT_CONFIG):
@@ -149,12 +177,20 @@ def main(argv=None):
             if p.kind in host_type:         # Bambu printers: the slicer sends to the printer itself
                 log(f"print host for PrusaSlicer / OrcaSlicer: http://<this PC>:{s['port']}/p/{p.id}  "
                     f"(host type {host_type[p.kind]})")
+    if args.until_done:
+        sl = cfg["slicer"]
+        threading.Thread(target=watch_until_done, args=(printers, httpd.shutdown),
+                         kwargs={"linger": sl["stop_after"] * 60, "wait": sl["start_within"] * 60},
+                         name="until-done", daemon=True).start()
+        log(f"started by the slicer: stops {sl['stop_after']:g} min after the print "
+            f"(or after {sl['start_within']:g} min if no print starts)")
     if args.open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    httpd.server_close()
 
 
 if __name__ == "__main__":

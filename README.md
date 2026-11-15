@@ -236,6 +236,20 @@ The hook only copies the file to `incoming/` (it never changes or blocks an expo
 problems go to `logs/hook.log`). Without it PrintTwin still works – the model then builds
 up while the file downloads.
 
+**PrintTwin starts by itself**: when the slicer *sends* a job to a printer (Prusa Connect,
+PrusaLink, PrintTwin as print host, OctoPrint, … – not a plain export to a file) and PrintTwin
+isn't running, the hook starts it in the background, without a window (log:
+`logs/printtwin.log`). That PrintTwin stops by itself 10 minutes after the print is done – or
+after 30 minutes if no print starts. Started with `PrintTwin.bat` / `run.py`, it runs until you
+close it, as before. In `config.local.toml`:
+
+```toml
+[slicer]
+autostart = false     # the hook doesn't start PrintTwin
+stop_after = 10       # minutes after the print
+start_within = 30     # minutes to wait for a print to start
+```
+
 ### Optional: prints sent via Prusa Connect (unofficial)
 
 An MK4 / MK3.9 / CORE One / XL / MINI doesn't hand out the file of a print that came via

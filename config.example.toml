@@ -50,6 +50,12 @@ listen_port = 8514
 # hostname http://<this PC's IP>:8790/p/<printer id>, API key = the printer's PrusaLink key.
 # PrintTwin passes each call on unchanged with the slicer's key; it adds no credentials itself.
 print_host = false
+# The hook (tools/prusaslicer_hook.py) starts PrintTwin in the background when the slicer sends
+# a job and PrintTwin isn't running; it then stops stop_after minutes after the print (or
+# start_within minutes after its start if no print begins). autostart = false: never.
+autostart = true
+stop_after = 10
+start_within = 30
 
 [connect]
 # Optional, unofficial: a print sent via Prusa Connect isn't handed out by the MK4 / CORE One / XL /

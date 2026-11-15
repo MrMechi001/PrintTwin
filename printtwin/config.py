@@ -150,6 +150,13 @@ def load(path: Path | None = None) -> dict:
     cfg.setdefault("slicer", {})
     v = cfg["slicer"].get("print_host", False)          # only an explicit yes turns it on
     cfg["slicer"]["print_host"] = v is True or str(v).strip().lower() in ("true", "yes", "on", "1")
+    v = cfg["slicer"].get("autostart", True)            # the hook starts PrintTwin for a sent job
+    cfg["slicer"]["autostart"] = v is True or str(v).strip().lower() in ("true", "yes", "on", "1")
+    for k, d in (("stop_after", 10.0), ("start_within", 30.0)):     # minutes (--until-done)
+        try:
+            cfg["slicer"][k] = max(0.0, float(cfg["slicer"].get(k, d)))
+        except (TypeError, ValueError):
+            cfg["slicer"][k] = d
     cfg.setdefault("connect", {})                       # Prusa Connect: off unless an explicit yes
     v = cfg["connect"].get("enabled", False)
     cfg["connect"]["enabled"] = v is True or str(v).strip().lower() in ("true", "yes", "on", "1")
