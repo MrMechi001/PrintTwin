@@ -10,6 +10,14 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
+## Unreleased
+
+* **Clearer setup**: if `config.local.toml` isn't complete, PrintTwin now says per printer which line
+  is missing (instead of "printer ?"). A block with a serial number and access code counts as a
+  Bambu Lab printer even without `kind = "bambu"`, a missing `id` is made up, the untouched example
+  block is left out next to a filled one, and a typo in the file (e.g. missing quotes) gets a hint
+  instead of a Python error. The first start explains the Bambu Lab and Klipper blocks too.
+
 ## 0.8.2 – Timelapse
 
 * **Timelapse** (button *Timelapse*): replay the print from the first layer in 15 s – 2 min or

@@ -6,6 +6,7 @@ import shutil
 import socket
 import sys
 import threading
+import tomllib
 import webbrowser
 from pathlib import Path
 
@@ -46,10 +47,14 @@ def first_run(path: Path) -> bool:
 PrintTwin {__version__} - first start
 Created {path}
 Open it in a text editor and fill in your printer:
-  host    = the printer's IP address   (printer: Settings > Network)
-  api_key = its PrusaLink API key      (printer: Settings > Network > PrusaLink)
-            MK3 / MK3S / MK3S+ with PrusaLink on a Raspberry Pi: the API key from PrusaLink's web page
-            (Settings), or user + password from its setup
+  Prusa:     host    = the printer's IP address   (printer: Settings > Network)
+             api_key = its PrusaLink API key      (printer: Settings > Network > PrusaLink)
+             MK3 / MK3S / MK3S+ with PrusaLink on a Raspberry Pi: the API key from PrusaLink's web page
+             (Settings), or user + password from its setup
+  Bambu Lab: use the Bambu block further down instead (remove the # in front of its lines):
+             kind = "bambu", host = the IP address, serial = the serial number,
+             access_code = the LAN access code (both on the printer's screen)
+  Klipper:   the Moonraker block further down (kind = "moonraker", host = Mainsail / Fluidd address)
 For the live nozzle position also turn on the printer's metrics (README: "Turn on the printer's metrics").
 Then start PrintTwin again.
 """)
@@ -66,7 +71,11 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.config is None and first_run(config.DEFAULT_CONFIG):
         sys.exit(1)
-    cfg = config.load(args.config)
+    try:
+        cfg = config.load(args.config)
+    except tomllib.TOMLDecodeError as e:
+        sys.exit(f"{args.config or config.DEFAULT_CONFIG} can't be read: {e}\n"
+                 f'(text needs quotes, e.g.  serial = "01P00A123456789"  and  access_code = "12345678")')
     if args.command == "connect-login":
         from . import connect
         try:
@@ -74,20 +83,13 @@ def main(argv=None):
         except (connect.ConnectError, KeyboardInterrupt, EOFError) as e:
             sys.exit(f"Not signed in: {e}")
         return
-    def _incomplete(pc: dict) -> bool:
-        kind = pc.get("kind", "prusalink")
-        if not filled(pc.get("host")):
-            return True
-        if kind == "prusalink":                 # the API key - or user + password (PrusaLink on a Raspberry Pi)
-            return not filled(pc.get("api_key")) and not (filled(pc.get("user")) and filled(pc.get("password")))
-        if kind == "bambu":                     # the serial number and the LAN access code (printer screen)
-            return not all(filled(pc.get(k)) for k in ("serial", "access_code"))
-        return False
-    pending = [pc.get("id", "?") for pc in cfg.get("printer", []) if _incomplete(pc)]
-    if pending or not cfg.get("printer"):
-        print(f"Please enter your printer's IP address and its PrusaLink API key (or PrusaLink's user and "
-              f"password; Bambu Lab: serial number and LAN access code) in {args.config or config.DEFAULT_CONFIG} "
-              f"(printer {', '.join(pending) or '- none configured -'}).")
+    notes, problems = config.prepare_printers(cfg)
+    for n in notes:
+        log(n)
+    if problems:
+        print(f"PrintTwin can't start yet - please complete {args.config or config.DEFAULT_CONFIG}:\n  "
+              + "\n  ".join(problems)
+              + "\n(the README shows a full block for each kind of printer: Prusa, Klipper, Bambu Lab)")
         sys.exit(1)
     cache = Path(cfg.get("cache_dir") or ROOT / "cache")
     cache.mkdir(parents=True, exist_ok=True)
