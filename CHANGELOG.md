@@ -10,7 +10,7 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
-## Unreleased
+## 0.8.3 – Clearer setup
 
 * **Clearer setup**: if `config.local.toml` isn't complete, PrintTwin now says per printer which line
   is missing (instead of "printer ?"). A block with a serial number and access code counts as a
