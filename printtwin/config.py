@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -24,15 +25,59 @@ NEEDS = {      # kind -> [(key, what it is)]
 }
 
 
-def prepare_printers(cfg: dict) -> tuple[list[str], list[str]]:
+PRINTER_KEYS = {"id", "name", "kind", "host", "api_key", "user", "password", "model", "serial", "access_code",
+                "cafile", "mqtt_port", "ftps_port", "ftps_plain_data"}
+ALIASES = {"ip": "host", "ip_address": "host", "ipaddress": "host", "address": "host", "hostname": "host",
+           "url": "host", "apikey": "api_key", "api-key": "api_key", "key": "api_key", "serial_number": "serial",
+           "serialnumber": "serial", "seriennummer": "serial", "sn": "serial", "accesscode": "access_code",
+           "access-code": "access_code", "lan_access_code": "access_code", "code": "access_code", "type": "kind",
+           "username": "user", "pass": "password"}
+_COMMENTED = re.compile(r"^\s*#+\s*(\[\[printer\]\]|([A-Za-z_-]+)\s*=\s*(.*?))\s*$")
+
+
+def _commented_settings(text: str) -> list[tuple[int, str]]:
+    """(line number, key) of printer settings that are commented out (# in front) although they
+    hold the user's own values - i.e. differ from every commented line of config.example.toml."""
+    def norm(line):
+        m = _COMMENTED.match(line)
+        if not m or not m.group(2):
+            return None
+        key = m.group(2).lower()
+        val = re.sub(r'\s+#.*$', "", m.group(3)) if not m.group(3).startswith(("'", '"')) else \
+            re.sub(r'^(".*?"|\'.*?\').*$', r"\1", m.group(3))
+        return key, val.strip()
+    try:
+        example = {norm(l) for l in (ROOT / "config.example.toml").read_text(encoding="utf-8").splitlines()}
+    except OSError:
+        example = set()
+    out = []
+    for n, line in enumerate(text.splitlines(), 1):
+        kv = norm(line)
+        if kv and ALIASES.get(kv[0], kv[0]) in PRINTER_KEYS and kv not in example and kv[1]:
+            out.append((n, ALIASES.get(kv[0], kv[0])))
+    return out
+
+
+def prepare_printers(cfg: dict, text: str | None = None) -> tuple[list[str], list[str]]:
     """Make the [[printer]] blocks usable and say what is missing, per printer.
+    * keys in other spellings (Host, IP, serial_number, ...): taken as the right key
     * serial + access_code but no kind (or the example's "prusalink" with no API key): Bambu Lab
     * no id: one from the name (or the kind), unique
     * a block that still holds only the example's values is left out when another printer is filled in
+    * text (the config file): if something is missing, name the lines that are commented out (#)
+      although they hold the user's own values
     Changes cfg["printer"]; returns (notes, problems) - notes: what was assumed, problems: one
     line per printer that cannot work yet (empty: all fine)."""
     notes, problems = [], []
     blocks = [pc for pc in cfg.get("printer", []) if isinstance(pc, dict)]
+    for n, pc in enumerate(blocks, 1):
+        for k in list(pc):
+            right = ALIASES.get(k.lower().strip(), k.lower().strip())
+            if right != k and right in PRINTER_KEYS and right not in pc:
+                pc[right] = pc.pop(k)
+                notes.append(f"printer {n}: {k} = ... taken as {right}")
+            elif right not in PRINTER_KEYS:
+                notes.append(f"printer {n}: {k} = ... is not a setting PrintTwin knows - ignored")
     for n, pc in enumerate(blocks, 1):
         kind = str(pc.get("kind") or "").strip().lower()
         if (kind in ("", "prusalink") and (filled(pc.get("serial")) or filled(pc.get("access_code")))
@@ -84,6 +129,12 @@ def prepare_printers(cfg: dict) -> tuple[list[str], list[str]]:
     cfg["printer"] = blocks
     if not blocks:
         problems.append("no [[printer]] block - copy one from config.example.toml")
+    if problems and text:
+        hidden = _commented_settings(text)
+        if hidden:
+            lines = ", ".join(f"{n} ({k})" for n, k in hidden)
+            problems.append(f"these lines start with # and are therefore ignored: line {lines} - delete the # "
+                            f"at the start of each of them (and in front of the [[printer]] line above them)")
     return notes, problems
 
 

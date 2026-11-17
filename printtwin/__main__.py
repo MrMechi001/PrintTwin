@@ -83,7 +83,11 @@ def main(argv=None):
         except (connect.ConnectError, KeyboardInterrupt, EOFError) as e:
             sys.exit(f"Not signed in: {e}")
         return
-    notes, problems = config.prepare_printers(cfg)
+    try:
+        text = Path(args.config or config.DEFAULT_CONFIG).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = None
+    notes, problems = config.prepare_printers(cfg, text)
     for n in notes:
         log(n)
     if problems:

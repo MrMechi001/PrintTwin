@@ -10,6 +10,12 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
+## Unreleased
+
+* Setup check, part 2: lines of a printer block that still start with `#` (so they are ignored)
+  are named with their line numbers, and keys in other spellings (`IP`, `Host`, `serial_number`,
+  `Seriennummer`, ...) are understood; unknown keys are named.
+
 ## 0.8.3 – Clearer setup
 
 * **Clearer setup**: if `config.local.toml` isn't complete, PrintTwin now says per printer which line

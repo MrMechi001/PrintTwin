@@ -83,6 +83,33 @@ def main():
 
     check("no printer at all is reported", prep()[2] != [])
 
+    ps, notes, probs = prep({"ID": "x", "Kind": "bambu", "IP": "192.168.1.50", "Seriennummer": "01P00A123456789",
+                             "Access_Code": "12345678", "colour": "red"})
+    check("other spellings (IP, Seriennummer, Access_Code, Kind): understood", not probs and ps[0]["host"]
+          == "192.168.1.50" and ps[0]["serial"] == "01P00A123456789" and ps[0]["access_code"] == "12345678", probs)
+    check("... and an unknown setting is named", any("colour" in n and "not a setting" in n for n in notes), notes)
+
+    # the friend's file: the Prusa block emptied (its [[printer]] line kept), the Bambu block filled in
+    # but every line still commented out
+    ex_text = (ROOT / "config.example.toml").read_text(encoding="utf-8")
+    lines = ex_text.splitlines()
+    first = lines.index("[[printer]]")
+    end = next(i for i in range(first + 1, len(lines)) if lines[i].startswith("# A Klipper"))
+    friend = lines[:first + 1] + [""] + lines[end:]
+    friend = "\n".join(friend).replace('# host = "192.168.x.y"\n# serial', '# host = "192.168.1.50"\n# serial') \
+        .replace('# serial = "01P00A..."', '# serial = "01P00A123456789"') \
+        .replace('# access_code = "12345678"', '# access_code = "87654321"')
+    cfg = tomllib.loads(friend)
+    notes, probs = config.prepare_printers(cfg, friend)
+    hint = next((p for p in probs if "start with #" in p), "")
+    check("friend's file: the commented-out Bambu lines are named", "(serial)" in hint and "(access_code)" in hint
+          and "(host)" in hint and "(api_key)" not in hint, probs)
+    check("... with their line numbers", all(f"{n} (" in hint for n, l in enumerate(friend.splitlines(), 1)
+                                             if l.startswith(("# serial", "# access_code"))), hint)
+    notes, probs = config.prepare_printers(tomllib.loads(ex_text), ex_text)
+    check("untouched example: no # hint (its comments are the example's own)",
+          not any("start with #" in p for p in probs), probs)
+
     # run.py itself (always with --config: never the user's own config)
     tmp = Path(tempfile.mkdtemp(prefix="printtwin-config-"))
     bad = tmp / "bad.toml"
