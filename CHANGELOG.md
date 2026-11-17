@@ -10,7 +10,7 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
-## Unreleased
+## 0.8.3.1 – Setup check, part 2
 
 * Setup check, part 2: lines of a printer block that still start with `#` (so they are ignored)
   are named with their line numbers, and keys in other spellings (`IP`, `Host`, `serial_number`,
