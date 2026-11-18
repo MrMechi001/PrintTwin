@@ -12,6 +12,8 @@ Geometry
     LoveBoard cover r3 and Y belt holders r3. Their poses (and the idler's) were found by
     registering each STEP part on Marcus_3D's "Prusa MK4S Model for PrusaSlicer" (Printables
     1030417, GPL-2.0) - see LOCATED below; that mesh is a reference only, nothing of it is used.
+  * Prusa Research, "XL printable parts" (Printables 449554, GPL-2.0): the xLCD knob (the MK4's
+    is the same part).
   * Added here from datasheet / official dimensions: motors, heatbed MK52 + steel sheet,
     spacers, linear bearings, belts, nozzle + heater block, LCD reset button, MK4S
     print-fan impeller.
@@ -511,6 +513,7 @@ def main(variant="mk4"):
             "sources": [
                 "FokieH, 'Prusa MK4 Model', printables.com/model/961911, GPL-2.0",
                 "Prusa Research, 'MK4/MK3.9 printable parts', printables.com/model/451501, GPL-2.0",
+                "Prusa Research, 'XL printable parts' (xLCD knob), printables.com/model/449554, GPL-2.0",
             ] + ([
                 "Prusa Research, 'MK4S/MK3.9S printable parts', printables.com/model/451500, GPL-2.0",
             ] if mk4s else []) + [

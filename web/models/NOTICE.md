@@ -16,12 +16,14 @@ Built by `tools/cad/build_mk4.py` (`mk4` / `mk4s`) from:
 * **Prusa Research, "MK4S/MK3.9S printable parts"** – https://www.printables.com/model/451500 –
   GPL-2.0 (`mk4s.glb` only): MK4S Nextruder print-fan case and cover, 360° fan shroud,
   fan-door cover, heatsink spacer, LoveBoard cover r3, Y belt holder and tensioner r3.
+* **Prusa Research, "XL printable parts"** – https://www.printables.com/model/449554 – GPL-2.0:
+  the xLCD knob (the same knob as the MK4's).
 * **Marcus_3D, "Prusa MK4S Model for PrusaSlicer"** – https://www.printables.com/model/1030417 –
   GPL-2.0: used only as a measuring reference to find where the idler and the MK4S Nextruder
   parts sit (each Prusa part was registered on it); none of its geometry is in the models.
 * PrintTwin (`tools/cad/build_mk4.py`, GPL-2.0): motors, MK52 heatbed and steel sheet
   (official dimensions: 254 × 264.4 mm heatbed, 252 × 241 mm sheet), spacers, linear
-  bearings, belts and pulleys, nozzle and heater block, LCD knob and reset button, hotend-fan
+  bearings, belts and pulleys, nozzle and heater block, LCD reset button, hotend-fan
   rotor and MK4S print-fan impeller.
 
 The source of the models is those STEP files plus the build script: download the
