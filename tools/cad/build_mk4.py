@@ -13,7 +13,7 @@ Geometry
     registering each STEP part on Marcus_3D's "Prusa MK4S Model for PrusaSlicer" (Printables
     1030417, GPL-2.0) - see LOCATED below; that mesh is a reference only, nothing of it is used.
   * Added here from datasheet / official dimensions: motors, heatbed MK52 + steel sheet,
-    spacers, linear bearings, belts, nozzle + heater block, LCD knob / reset button, MK4S
+    spacers, linear bearings, belts, nozzle + heater block, LCD reset button, MK4S
     print-fan impeller.
 
 Frames
@@ -52,6 +52,7 @@ from OCP.TopExp import TopExp_Explorer  # noqa: E402
 FOKIEH = ROOT / "cad_src/fokieh/MK4-COMPLETE_withSpoolHolder_20240913.stp"
 PRUSA = ROOT / "cad_src/prusa_mk4_parts/extracted"
 PRUSA_S = ROOT / "cad_src/prusa_mk4s_parts/extracted"
+XL_KNOB = ROOT / "cad_src/prusa_xl_parts/extracted/LCD/knob.stp"      # the same xLCD knob as the MK4's
 VARIANTS = ("mk4", "mk4s")
 
 # ----------------------------------------------------------------------------- calibration
@@ -260,6 +261,22 @@ def frame_for(axis):
     return np.column_stack([x, y, z])
 
 
+LCD_N = np.array([0, np.sin(np.radians(50)), np.cos(np.radians(50))])     # out of the xLCD front face (FokieH)
+LCD_UP = np.array([0, LCD_N[2], -LCD_N[1]])                              # up along the face
+
+
+def reset_button(flats=10.5, leg=3.0, height=3.0, proud=0.4):
+    """The xLCD's octagonal reset button, black with a red ring on top. Local: centred, z out of the
+    face, the cover's front face at z = 0; the button stands `proud` mm out of it."""
+    h = flats / 2
+    pts = [(-h + leg, -h), (h - leg, -h), (h, -h + leg), (h, h - leg), (h - leg, h), (-h + leg, h),
+           (-h, h - leg), (-h, -h + leg)]
+    body = cq.Workplane("XY").polyline(pts).close().extrude(height).translate((0, 0, proud - height))
+    ring = (cq.Workplane("XY").polyline(pts).close().offset2D(-0.7).extrude(0.15)
+            .cut(cq.Workplane("XY").polyline(pts).close().offset2D(-1.5).extrude(0.15)).translate((0, 0, proud)))
+    return [("lcd-reset", "petg", body), ("lcd-reset-ring", "red", ring)]
+
+
 def nema17(length):
     """Local frame: mounting face at z=0, body towards -z, shaft towards +z."""
     body = cq.Workplane("XY").rect(42.3, 42.3).extrude(-length).edges("|Z").chamfer(4.6)
@@ -412,13 +429,18 @@ def main(variant="mk4"):
     sock = cq.Workplane("XY").workplane(offset=5.6).rect(21, 17).extrude(12).edges("|Z").fillet(3)
     parts.append(("heater-sock", "carriage", "sock", place(mesh_of(sock, 0.05), frame_for([0, 1.0, 0]), NOZ + [1.5, 0, 0])))
 
-    # LCD: knob + reset button on the tilted front face (normal (0, .766, .643))
-    n_lcd = np.array([0, 0.766, 0.643])
-    knob = cq.Workplane("XY").circle(11.5).extrude(9).faces(">Z").edges().fillet(1.2)
-    parts.append(("lcd-knob", "static", "petg", place(mesh_of(knob, 0.04), frame_for(n_lcd),
-                                                     np.array([206.9, 33.1, 512.8]))))
-    btn = cq.Workplane("XY").circle(3.6).extrude(2.5).faces(">Z").edges().fillet(0.8)
-    parts.append(("lcd-reset", "static", "red", place(mesh_of(btn, 0.03), frame_for(n_lcd), np.array([210.1, 45.7, 497.8]))))
+    # LCD (front face tilted back 40 deg): Prusa's xLCD knob in the cover's knob hole (FokieH's cover:
+    # hole r 5 at u 210.06, v -351.89, front face d 355.09, knob recess d 354.34) and the octagonal
+    # reset button below it (Prusa's xlcd-cover: its opening 1.0 mm left of the hole, 19.6 mm below)
+    n_lcd = LCD_N
+    M_lcd = np.column_stack([[1.0, 0, 0], LCD_UP, LCD_N])           # local x right, y up the face, z out
+
+    def on_lcd(u, v, d):
+        return u * np.array([1.0, 0, 0]) + v * LCD_UP + d * LCD_N
+    parts.append(("lcd-knob", "static", "petg", place(tessellate(read_step(XL_KNOB), 0.04, 0.3),
+                                                     M_lcd @ np.diag([1.0, -1.0, -1.0]), on_lcd(210.06, -351.89, 354.64))))
+    for name, mat, shape in reset_button():
+        parts.append((name, "static", mat, place(mesh_of(shape, 0.02), M_lcd, on_lcd(209.07, -371.47, 355.09))))
 
     # ---------------------------------------------------------------- bed: MK52 + sheet, built in G-code bed coordinates
     bedparts = []

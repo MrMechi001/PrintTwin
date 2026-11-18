@@ -19,6 +19,9 @@
 * **Timelapse videos: choose where to save** – *Start* asks for the file (Chrome, Edge, the
   slicer's printer tab; it opens in the folder you chose last time). Other browsers save it to
   your downloads, as before.
+* **MK4 / MK4S / XL display as it really is**: Prusa's knob in the cover's knob hole and the
+  octagonal reset button (red ring) below it - they were swapped, the knob a plain disc. The
+  XL's display cover faced the wrong way.
 
 ## 0.8.4 – Starts by itself
 

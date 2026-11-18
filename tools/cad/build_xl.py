@@ -45,7 +45,7 @@ ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 import cadquery as cq  # noqa: E402
 from build_mini import extrusion30  # noqa: E402
-from build_mk4 import MATS, frame_for, mesh_of, nema17, place, pulley  # noqa: E402
+from build_mk4 import MATS, frame_for, mesh_of, nema17, place, pulley, reset_button  # noqa: E402
 from cadutil import read_step  # noqa: E402
 from glb import GlbWriter, tessellate  # noqa: E402
 
@@ -217,13 +217,19 @@ def main():
         add(f"z-bearing-housing-{sx}", "static", "petg", place(bh, Rb, np.array([xl, yl, TOP_Z0 - 46.0])))
 
     # ---------------------------------------------------------------- xLCD in front of the base (Prusa's cover + knob)
+    # The cover's STEP: front face at its z = 0 (normal -z), seen from the front its x runs right to
+    # left - turned about y it stands on the body (front face at local z = 12.4). Knob hole (r 5) at
+    # STEP (-56.15, -4.15), knob recess 0.75 deep; reset opening centred at (-55.16, -23.73).
     c20, s20 = np.cos(np.radians(20)), np.sin(np.radians(20))
     R_lcd = np.column_stack([[1.0, 0, 0], [0, s20, c20], [0, -c20, s20]])       # local z out of the screen, tilted back 20 deg
     lcd_c = np.array([180.0, BY0 - 25.0, 64.0])
-    add("xlcd-cover", "static", "petg", place(tessellate(step("xlcd-cover"), 0.06, 0.3), R_lcd, lcd_c))
+    add("xlcd-cover", "static", "petg", place(tessellate(step("xlcd-cover"), 0.06, 0.3), R_lcd @ np.diag([-1.0, 1.0, -1.0]),
+                                              lcd_c + R_lcd @ np.array([0, 0, 12.4])))
     add("xlcd-body", "static", "elbox", place(mesh_of(box(-68, -32, -22, 68, 30, 0), 0.1), R_lcd, lcd_c))
     add("lcd-knob", "static", "petg", place(tessellate(step("knob"), 0.04, 0.3), R_lcd @ np.diag([1.0, -1.0, -1.0]),
-                                              lcd_c + R_lcd @ np.array([52.0, -12.0, 12.4 + 15.0])))
+                                              lcd_c + R_lcd @ np.array([56.15, -4.15, 12.4 - 0.75 + 0.3])))
+    for name, mat, shape in reset_button():
+        add(name, "static", mat, place(mesh_of(shape, 0.02), R_lcd, lcd_c + R_lcd @ np.array([55.16, -23.73, 12.4])))
 
     # ---------------------------------------------------------------- spool holder (right side) + entry filament sensor
     sc = np.array(SPOOL["center"])
@@ -310,7 +316,7 @@ def main():
         w.node(name, w.mesh(name, Pp, np.asarray(Nn, dtype=np.float32), Ii, mats[mat]), parent=groups[grp])
 
     def lcd(x, y):
-        return (lcd_c + R_lcd @ np.array([x, y, 12.6])).round(2).tolist()
+        return (lcd_c + R_lcd @ np.array([x, y, 12.4 - 0.6])).round(2).tolist()
 
     def r2(p):
         return np.round(np.asarray(p, dtype=float), 2).tolist()
