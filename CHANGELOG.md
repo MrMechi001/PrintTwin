@@ -10,7 +10,7 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
-## Unreleased
+## 0.8.4 – Starts by itself
 
 * **PrintTwin starts by itself** when the slicer sends a job (Prusa Connect, PrusaLink, …): the
   slicer hook starts it in the background without a window, and it stops 10 min after the print.
