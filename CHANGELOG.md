@@ -10,6 +10,12 @@
 * Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
 * Setup page in the browser, Windows package.
 
+## Unreleased
+
+* **Timelapse videos: choose where to save** – *Start* asks for the file (Chrome, Edge, the
+  slicer's printer tab; it opens in the folder you chose last time). Other browsers save it to
+  your downloads, as before.
+
 ## 0.8.4 – Starts by itself
 
 * **PrintTwin starts by itself** when the slicer sends a job (Prusa Connect, PrusaLink, …): the

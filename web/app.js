@@ -839,10 +839,28 @@ function parkPose(count) {
   return [bedBox.x1, (bedBox.y0 + bedBox.y1) / 2, (li >= 0 ? tp.info.layers[li][0] : 0) + 1];
 }
 
-function startLapse() {
-  if (run.on) return;
+let picking = false;
+async function startLapse() {
+  if (run.on || picking) return;
   if (lapse.mode === 'replay') {
     if (!tp?.n) { lpStatus.textContent = 'No toolpath yet'; return; }
+  }
+  // the video's file: asked for now, while the click still counts as the user's (a browser asks
+  // only then); null: the browser's downloads (Firefox, Safari: no "save as" for pages)
+  let target = null;
+  if (lapse.mode === 'replay' && lapse.rec && window.showSaveFilePicker && videoType()) {
+    picking = true;
+    try {
+      target = await pickVideoFile();
+    } catch (e) {
+      if (e.name === 'AbortError') { lpStatus.textContent = 'Not started (no file chosen)'; return; }
+      target = null;                                       // not allowed here: downloads as before
+    } finally {
+      picking = false;
+    }
+    if (!tp?.n) { lpStatus.textContent = 'No toolpath yet'; return; }   // the job changed meanwhile
+  }
+  if (lapse.mode === 'replay') {
     const upToNow = lapse.range === 'now' && isPrinting() && liveCount >= 1;
     run.cumEnd = cumAt(upToNow ? Math.min(liveCount, tp.n) : tp.n);
     run.key = tp.key;
@@ -861,7 +879,7 @@ function startLapse() {
   lpStatus.textContent = '';
   wake();
   if (lapse.mode === 'replay' && lapse.rec) {
-    try { run.recorder = startRecording(); } catch (e) { lpStatus.textContent = `No video: ${e.message}`; }
+    try { run.recorder = startRecording(target); } catch (e) { lpStatus.textContent = `No video: ${e.message}`; }
   }
 }
 
@@ -877,9 +895,35 @@ function stopLapse() {
 
 // The 3D view as a video: MP4 (H.264) where the browser records it, else WebM. Recorded at an even
 // size of at most 1920 px on the long side (what video players and encoders expect).
-function startRecording() {
-  const type = ['video/mp4;codecs=avc1.640033', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
-    .find((t) => MediaRecorder.isTypeSupported(t));
+function videoType() {
+  if (!window.MediaRecorder) return null;
+  return ['video/mp4;codecs=avc1.640033', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+    .find((t) => MediaRecorder.isTypeSupported(t)) || null;
+}
+const videoName = (type) => `${(state?.job?.name || 'print').replace(/\.(gcode\.3mf|bgcode|gcode|3mf)$/i, '')
+  .replace(/[^\w.-]+/g, '_')}-timelapse.${type.startsWith('video/mp4') ? 'mp4' : 'webm'}`;
+
+// "Save as": the browser's own dialog; it starts in the folder chosen last time (id)
+function pickVideoFile() {
+  const type = videoType(), mime = type.split(';')[0], ext = mime === 'video/mp4' ? '.mp4' : '.webm';
+  return window.showSaveFilePicker({
+    id: 'printtwin-timelapse', startIn: 'videos', suggestedName: videoName(type),
+    types: [{ description: `${ext.slice(1).toUpperCase()} video`, accept: { [mime]: [ext] } }],
+  });
+}
+
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+function startRecording(target = null) {
+  const type = videoType();
   if (!type) throw new Error('this browser cannot record the view');
   const pr = renderer.getPixelRatio(), w = window.innerWidth, h = window.innerHeight;
   const k = Math.min(1, 1920 / (Math.max(w, h) * pr));
@@ -888,25 +932,31 @@ function startRecording() {
   const stream = canvas.captureStream(60);
   const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 6e6 });
   const chunks = [];
-  const ext = type.startsWith('video/mp4') ? 'mp4' : 'webm';
-  const name = `${(state?.job?.name || 'print').replace(/\.(gcode\.3mf|bgcode|gcode|3mf)$/i, '').replace(/[^\w.-]+/g, '_')}-timelapse.${ext}`;
+  const name = videoName(type);
   const restore = () => { renderer.setPixelRatio(pr); resize(); };
   rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
   rec.onerror = (e) => { lpStatus.textContent = `Video failed: ${e.error?.message || 'recorder error'}`; };
-  rec.onstop = () => {
+  rec.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
     restore();
     if (!chunks.length) return;
     const blob = new Blob(chunks, { type: type.split(';')[0] });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name;
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-    lpStatus.textContent = `Saved ${name} (${(blob.size / 1e6).toFixed(1)} MB)`;
+    const mb = `${(blob.size / 1e6).toFixed(1)} MB`;
     window.printtwin.lastVideo = blob;
+    if (target) {
+      try {
+        lpStatus.textContent = `Saving ${target.name} …`;
+        const w = await target.createWritable();
+        await w.write(blob);
+        await w.close();
+        lpStatus.textContent = `Saved ${target.name} (${mb})`;
+        return;
+      } catch (e) {
+        lpStatus.textContent = `Couldn't write ${target.name} (${e.message}) - downloading it instead`;
+      }
+    }
+    download(blob, target?.name || name);
+    if (!target) lpStatus.textContent = `Saved ${name} to your downloads (${mb})`;
   };
   rec.start(500);
   return rec;
