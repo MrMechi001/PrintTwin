@@ -65,7 +65,8 @@ def _listening(addr: tuple) -> bool:
         return False
 
 
-def autostart(host: str | None, cfg_path: Path | None = None, log_path: Path | None = None, wait: float = 15.0):
+def autostart(host: str | None, cfg_path: Path | None = None, log_path: Path | None = None, wait: float = 15.0,
+              who: str | None = None):
     """The slicer sent the job to a printer (any host but "File", a plain export): start PrintTwin
     hidden unless it runs already - with --until-done, so it stops by itself after the print.
     Waits until it answers (the slicer may upload to it right after this script). Returns the
@@ -92,7 +93,7 @@ def autostart(host: str | None, cfg_path: Path | None = None, log_path: Path | N
     # own stdin/stdout/stderr and no other inherited handles: the slicer waits for the end of the
     # script's output, which must not wait for PrintTwin
     with open(log_path, "w" if big else "a", encoding="utf-8") as out:
-        out.write(f"\n{time.strftime('%Y-%m-%d %H:%M:%S')} started by the slicer hook ({host})\n")
+        out.write(f"\n{time.strftime('%Y-%m-%d %H:%M:%S')} started by {who or f'the slicer hook ({host})'}\n")
         out.flush()
         kw = dict(cwd=str(ROOT), env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                   close_fds=True)

@@ -245,10 +245,24 @@ close it, as before. In `config.local.toml`:
 
 ```toml
 [slicer]
-autostart = false     # the hook doesn't start PrintTwin
+autostart = false     # neither the hook nor the printer watch starts PrintTwin
 stop_after = 10       # minutes after the print
 start_within = 30     # minutes to wait for a print to start
 ```
+
+**…or whenever a print begins (printer watch, Windows):** the hook only runs for print profiles
+that have it. The printer watch works with any profile and any way of starting a print (Prusa
+Connect, a USB stick, the printer's screen): it runs in the background without a window, asks
+each Prusa and Klipper printer every 20 s whether it is printing, and starts PrintTwin the same
+way (it stops 10 minutes after the print). While PrintTwin runs, the printers aren't asked.
+Bambu Lab printers aren't watched. To start it with Windows:
+
+```
+pyenv\Scripts\python.exe tools\printer_watch.py --install
+```
+
+`--uninstall` removes it again (log: `logs/watch.log`). macOS / Linux: start
+`tools/printer_watch.py` with your system's autostart.
 
 ### Optional: prints sent via Prusa Connect (unofficial)
 

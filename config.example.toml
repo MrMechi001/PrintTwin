@@ -52,7 +52,8 @@ listen_port = 8514
 print_host = false
 # The hook (tools/prusaslicer_hook.py) starts PrintTwin in the background when the slicer sends
 # a job and PrintTwin isn't running; it then stops stop_after minutes after the print (or
-# start_within minutes after its start if no print begins). autostart = false: never.
+# start_within minutes after its start if no print begins). So does the printer watch
+# (tools/printer_watch.py --install) when any print begins. autostart = false: never.
 autostart = true
 stop_after = 10
 start_within = 30

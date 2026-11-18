@@ -40,8 +40,8 @@ def watch_until_done(printers: dict, stop, linger: float = 600.0, wait: float = 
         if busy:
             seen, last = True, now
         elif now - last >= (linger if seen else wait):
-            log("the print is done - PrintTwin stops (the slicer started it)" if seen else
-                f"no print started within {wait / 60:g} min - PrintTwin stops (the slicer started it)")
+            log("the print is done - PrintTwin stops (it was started in the background)" if seen else
+                f"no print started within {wait / 60:g} min - PrintTwin stops (it was started in the background)")
             stop()
             return
 
@@ -182,7 +182,7 @@ def main(argv=None):
         threading.Thread(target=watch_until_done, args=(printers, httpd.shutdown),
                          kwargs={"linger": sl["stop_after"] * 60, "wait": sl["start_within"] * 60},
                          name="until-done", daemon=True).start()
-        log(f"started by the slicer: stops {sl['stop_after']:g} min after the print "
+        log(f"started in the background: stops {sl['stop_after']:g} min after the print "
             f"(or after {sl['start_within']:g} min if no print starts)")
     if args.open:
         threading.Timer(0.5, webbrowser.open, args=(url,)).start()

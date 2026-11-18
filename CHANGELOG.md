@@ -14,6 +14,9 @@
 
 * **PrintTwin starts by itself** when the slicer sends a job (Prusa Connect, PrusaLink, …): the
   slicer hook starts it in the background without a window, and it stops 10 min after the print.
+  With any print profile and any way of starting a print: the **printer watch**
+  (`tools/printer_watch.py --install`, Windows) asks Prusa and Klipper printers every 20 s and
+  starts PrintTwin when a print begins.
 
 ## 0.8.3.1 – Setup check, part 2
 

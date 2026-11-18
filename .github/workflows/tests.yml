@@ -40,3 +40,7 @@ jobs:
         run: python -I tests/test_bambu_adapter.py
       - name: Config check (what a first-time user fills in)
         run: python -I tests/test_config.py
+      - name: Autostart by the slicer hook
+        run: python -I tests/test_autostart.py
+      - name: Printer watch
+        run: python -I tests/test_watch.py
