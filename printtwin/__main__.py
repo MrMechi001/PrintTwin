@@ -157,7 +157,8 @@ def main(argv=None):
     s = cfg["server"]
     url = f"http://localhost:{s['port']}/"
     try:                                    # bind first: a second PrintTwin must not start next to the first
-        httpd = serve(s["listen_host"], s["port"], printers, slicer=cfg["slicer"]["print_host"], log=log)
+        httpd = serve(s["listen_host"], s["port"], printers, slicer=cfg["slicer"]["print_host"], log=log,
+                      control=cfg["control"])
     except OSError as e:
         print(f"PrintTwin is already running (port {s['port']} is in use: {e.strerror or e}).\n"
               f"Opening the running one: {url}")

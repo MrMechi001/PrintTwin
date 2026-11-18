@@ -48,8 +48,31 @@
   <button id="bFit" type="button" title="Frame the view">Fit</button>
   <button id="bLapse" type="button" aria-pressed="false" aria-controls="lapse" title="Timelapse: replay the print or circle the live print">Timelapse</button>
   <button id="bPrinter" type="button" aria-pressed="false" title="Show the whole printer: moving bed, gantry and extruder">Printer</button>
+  <button id="bCtl" type="button" aria-pressed="false" aria-controls="ctl" title="Control the printer: pause, stop, print again, upload" hidden>Control</button>
   <button id="bPhone" type="button" title="Open this view on your phone">Phone</button>
 </nav>
+
+<section id="ctl" hidden aria-labelledby="ctlTitle">
+  <h2 id="ctlTitle">Printer control</h2>
+  <form id="ctlLock" hidden>
+    <label class="opt">Password <input id="ctlPw" type="password" autocomplete="current-password"></label>
+    <button type="submit">Unlock</button>
+  </form>
+  <div id="ctlMain" hidden>
+    <div class="btns">
+      <button id="ctlPause" type="button">Pause</button>
+      <button id="ctlResume" type="button">Resume</button>
+      <button id="ctlStop" type="button" class="danger">Stop</button>
+    </div>
+    <h3>Print again <button id="ctlReload" type="button" class="link" title="Read the printer's files again">↻</button></h3>
+    <ul id="ctlFiles"><li class="muted">…</li></ul>
+    <h3>Upload</h3>
+    <input id="ctlFile" type="file" accept=".bgcode,.gcode,.gco,.g">
+    <label class="chk"><input type="checkbox" id="ctlStart" checked> Print it right away</label>
+    <button id="ctlSend" type="button" disabled>Upload</button>
+  </div>
+  <div id="ctlStatus" class="muted" role="status"></div>
+</section>
 
 <section id="lapse" hidden aria-labelledby="lapseTitle">
   <h2 id="lapseTitle">Timelapse</h2>

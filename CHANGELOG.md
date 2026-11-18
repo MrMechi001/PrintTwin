@@ -7,11 +7,15 @@
   refined with real measurements. Other PrusaLink printers (MK3.9, CORE One, XL, MINI) and
   Klipper printers should already work – test reports welcome.
 * Klipper: objects excluded during the print (EXCLUDE_OBJECT) shown as not printed.
-* Printer control in the 3D view (start / pause / stop, upload, print queue) – opt-in, with login.
+* A print queue in the 3D view.
 * Setup page in the browser, Windows package.
 
 ## Unreleased
 
+* **Printer control in the 3D view** (opt-in, `[control] enabled = true`): pause, resume and stop
+  the print, print a file from the printer again (newest first), upload a file and print it.
+  Prusa (PrusaLink) and Klipper printers; Bambu Lab printers stay watch-only. This PC may always,
+  other devices only with `[control] password`.
 * **Timelapse videos: choose where to save** – *Start* asks for the file (Chrome, Edge, the
   slicer's printer tab; it opens in the folder you chose last time). Other browsers save it to
   your downloads, as before.

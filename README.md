@@ -284,10 +284,31 @@ kept in `connect.local.json` next to the config (keep it private; renewed on eve
 about 30 days unused). PrintTwin only reads the printer list and the job's file. These are the
 calls Prusa Connect's own web page makes, not a published API – Prusa may change them.
 
+### Optional: control the printer from the 3D view
+
+With `[control] enabled = true` in `config.local.toml` the viewer gets a **Control** button:
+pause, resume and stop the print, print a file from the printer again (its files, newest first;
+Klipper: the print history) and upload a `.bgcode` / `.gcode` file – printed right away if you
+like. Stop and printing ask first. Prusa printers (PrusaLink) and Klipper printers; Bambu Lab
+printers stay watch-only.
+
+```toml
+[control]
+enabled = true
+password = "..."      # only needed for phones and other devices
+```
+
+The PC PrintTwin runs on may always use it (the browser there and the slicer's printer tab).
+Other devices need the password; it goes over your network unencrypted, so use one of its own.
+
 ## Security & privacy
 
-* PrintTwin only **reads** from the printer (status, job file, metrics). It cannot start,
-  stop or change anything on its own.
+* By default PrintTwin only **reads** from the printer (status, job file, metrics). It cannot
+  start, stop or change anything on its own.
+* Printer control (`[control] enabled = true`, off by default): only from this PC, or with the
+  password from other devices. Other web sites can't use it from your browser (a custom header
+  they can't send, their origin and host names are refused). Bambu Lab printers are never
+  controlled.
 * Prusa Connect (`[connect] enabled = true`, off by default): only the printer list and the job
   file are read; the sign-in tokens stay in `connect.local.json` on your computer.
 * As the slicer's print host (`[slicer] print_host = true`, off by default) it passes the
@@ -440,10 +461,9 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 **Inside your slicer** (✅ PrusaLink and Klipper printers, see [above](#optional-printtwin-inside-prusaslicer--orcaslicer))
 * Next: a compact view for the slicer tab.
 
-**Control the printer from the 3D view** (opt-in, behind a login)
-* Start, pause and stop prints, upload jobs and manage a print queue right where you watch
-  the print. Today PrintTwin is deliberately read-only; control features will only come
-  with authentication, so nobody else on your network can operate the printer.
+**Control the printer from the 3D view** (✅ opt-in: pause, resume, stop, print again, upload –
+see [above](#optional-control-the-printer-from-the-3d-view))
+* Next: a print queue.
 
 **Easier to run**
 * Setup page in the browser (no config file editing), Windows package with tray icon.

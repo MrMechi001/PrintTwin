@@ -123,6 +123,18 @@ class _Digest:
         return "Digest " + ", ".join(parts)
 
 
+def _error_text(obj, body: bytes) -> str:
+    """The message of an error answer: PrusaLink {"title", "message"}, Moonraker {"error": {"message"}}."""
+    if isinstance(obj, dict):
+        err = obj.get("error")
+        if isinstance(err, dict):
+            return str(err.get("message") or "")
+        if isinstance(err, str):
+            return err
+        return str(obj.get("message") or obj.get("title") or "")
+    return body[:200].decode("utf-8", "replace").strip()
+
+
 class PrusaLink:
     """HTTP client used for PrusaLink and Moonraker alike (X-Api-Key or digest, JSON, streamed downloads)."""
     def __init__(self, host: str, api_key: str | None, timeout: float = 10.0,
@@ -135,23 +147,29 @@ class PrusaLink:
         # the API key wins when both are set (PrusaLink checks a key that is sent and ignores digest)
         self.digest = _Digest(str(user), str(password)) if user and password and not self.key else None
 
-    def _request(self, path: str, auth: str | None) -> urllib.request.Request:
-        headers = {"User-Agent": USER_AGENT}
+    def _request(self, path: str, auth: str | None, method: str = "GET", data=None,
+                 extra: dict | None = None) -> urllib.request.Request:
+        headers = {"User-Agent": USER_AGENT, **(extra or {})}
         if self.key:                          # no key configured: send no X-Api-Key at all
             headers["X-Api-Key"] = self.key
         if auth:
             headers["Authorization"] = auth
-        return urllib.request.Request(self.base + path, headers=headers)
+        if hasattr(data, "seek"):             # a file sent again after a digest challenge: from its start
+            data.seek(0)
+        return urllib.request.Request(self.base + path, headers=headers, method=method, data=data)
 
-    def _open(self, path: str, timeout: float | None = None):
+    def _open(self, path: str, timeout: float | None = None, method: str = "GET", data=None,
+              extra: dict | None = None):
         if self.digest is None:
-            return urllib.request.urlopen(self._request(path, None), timeout=timeout or self.timeout)
+            return urllib.request.urlopen(self._request(path, None, method, data, extra),
+                                          timeout=timeout or self.timeout)
         uri = self.prefix + path
         tried_fresh = False
         for _ in range(3):
-            sent = self.digest.header("GET", uri)          # the last challenge's nonce, nc + 1
+            sent = self.digest.header(method, uri)         # the last challenge's nonce, nc + 1
             try:
-                return urllib.request.urlopen(self._request(path, sent), timeout=timeout or self.timeout)
+                return urllib.request.urlopen(self._request(path, sent, method, data, extra),
+                                              timeout=timeout or self.timeout)
             except urllib.error.HTTPError as e:
                 if e.code != 401:
                     raise
@@ -181,6 +199,23 @@ class PrusaLink:
         if status == 204 or not body:
             return status, None
         return status, json.loads(body)
+
+    def call(self, method: str, path: str, data=None, headers: dict | None = None, timeout: float | None = None):
+        """Any request (printer control): returns (http_status, parsed_json_or_None, error text).
+        data: bytes, a file opened for reading (sent again from its start after a digest challenge)
+        or an iterable of bytes (headers must then give Content-Length)."""
+        try:
+            with self._open(path, timeout, method, data, headers) as r:
+                body, status = r.read(), r.status
+        except urllib.error.HTTPError as e:
+            body, status = e.read(), e.code
+        except DigestError as e:
+            return 401, None, str(e)
+        try:
+            obj = json.loads(body) if body else None
+        except ValueError:
+            obj = None
+        return status, obj, (_error_text(obj, body) if status >= 400 else "")
 
     def stream(self, path: str, on_chunk: Callable[[bytes, int, int], None], chunk: int = 32 * 1024) -> int:
         """GET `path` and hand every piece to on_chunk(data, bytes_so_far, total) as it arrives."""

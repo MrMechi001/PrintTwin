@@ -44,3 +44,5 @@ jobs:
         run: python -I tests/test_autostart.py
       - name: Printer watch
         run: python -I tests/test_watch.py
+      - name: Printer control (simulated printer + fake Moonraker)
+        run: python -I tests/test_control.py

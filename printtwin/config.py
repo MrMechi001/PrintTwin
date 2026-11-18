@@ -162,4 +162,9 @@ def load(path: Path | None = None) -> dict:
     cfg["connect"]["enabled"] = v is True or str(v).strip().lower() in ("true", "yes", "on", "1")
     tokens = Path(cfg["connect"].get("tokens") or "connect.local.json")
     cfg["connect"]["tokens"] = tokens if tokens.is_absolute() else Path(path or DEFAULT_CONFIG).resolve().parent / tokens
+    cfg.setdefault("control", {})                       # printer control from the 3D view: off unless a yes
+    v = cfg["control"].get("enabled", False)
+    cfg["control"]["enabled"] = v is True or str(v).strip().lower() in ("true", "yes", "on", "1")
+    pw = cfg["control"].get("password")
+    cfg["control"]["password"] = str(pw) if filled(pw) else ""
     return cfg

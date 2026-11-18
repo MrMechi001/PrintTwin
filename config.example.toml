@@ -65,3 +65,11 @@ start_within = 30
 # (on Prusa's own page - PrintTwin never sees the password; the sign-in tokens are kept in
 # connect.local.json next to this file, keep it private). Read-only: the printer list and the file.
 enabled = false
+
+[control]
+# Printer control in the 3D view (button "Control"): pause / resume / stop the print, print a file
+# from the printer again, upload a file and print it. Prusa (PrusaLink) and Klipper printers; not
+# Bambu Lab. Off unless enabled = true. This PC may then always use it; phones and other devices
+# only with the password below (sent over your network unencrypted - use one of its own).
+enabled = false
+# password = "..."

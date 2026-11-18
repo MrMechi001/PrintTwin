@@ -617,7 +617,9 @@ function fmtDur(s) {
 }
 
 function onState(s) {
+  const was = state?.state;
   state = s;
+  if (!ctlPanel.hidden) { ctlButtons(); if (was !== s.state) ctlFiles(); }
   const st = s.online ? (s.state || '–') : 'OFFLINE';
   const chip = $('state');
   chip.textContent = st;
@@ -809,6 +811,7 @@ lapsePanel.addEventListener('change', () => {
 bLapse.addEventListener('click', () => {
   lapsePanel.hidden = !lapsePanel.hidden;
   bLapse.setAttribute('aria-pressed', String(!lapsePanel.hidden));
+  if (!lapsePanel.hidden) { ctlPanel.hidden = true; bCtl.setAttribute('aria-pressed', 'false'); }
   if (!lapsePanel.hidden) { lpStatus.textContent = ''; lapseUi(); }
 });
 $('lpGo').addEventListener('click', startLapse);
@@ -962,6 +965,125 @@ function startRecording(target = null) {
   return rec;
 }
 
+// ------------------------------------------------------------------ printer control
+// Opt-in on the server ([control] enabled = true): pause / resume / stop, print a file from the
+// printer again, upload one. This PC may always; other devices send the [control] password.
+const ctlPanel = $('ctl'), bCtl = $('bCtl'), ctlStatus = $('ctlStatus');
+const ctl = { pw: '', busy: false };
+try { ctl.pw = sessionStorage.getItem('printtwin-pw') || ''; } catch { /* storage blocked */ }
+const BUSY = ['PRINTING', 'PAUSED', 'BUSY', 'ATTENTION'];
+
+function ctlHeaders() {
+  return { 'X-PrintTwin': 'control', ...(ctl.pw ? { 'X-PrintTwin-Password': ctl.pw } : {}) };
+}
+async function ctlCall(path, opts = {}) {
+  const r = await fetch(`${apiBase()}/control${path}`, { ...opts, headers: { ...ctlHeaders(), ...(opts.headers || {}) } });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(body.error || `HTTP ${r.status}`); e.status = r.status; throw e; }
+  return body;
+}
+function say(text, err = false) { ctlStatus.textContent = text; ctlStatus.classList.toggle('err', err); }
+
+async function ctlInfo() {
+  try {
+    const info = await ctlCall('');
+    bCtl.hidden = !(info.enabled && info.supported);
+    $('ctlLock').hidden = info.allowed || !info.password;
+    $('ctlMain').hidden = !info.allowed;
+    if (!info.allowed && !info.password) say(info.why || 'Not allowed', true);
+    return info;
+  } catch { bCtl.hidden = true; return null; }
+}
+
+function ctlButtons() {
+  const s = state?.state, off = ctl.busy || !state?.online;
+  $('ctlPause').disabled = off || s !== 'PRINTING';
+  $('ctlResume').disabled = off || s !== 'PAUSED';
+  $('ctlStop').disabled = off || !['PRINTING', 'PAUSED', 'ATTENTION'].includes(s);
+  const printing = BUSY.includes(s);
+  for (const b of $('ctlFiles').querySelectorAll('button')) b.disabled = off || printing;
+  $('ctlStart').disabled = printing;
+  if (printing) $('ctlStart').checked = false;
+  $('ctlSend').disabled = off || !$('ctlFile').files.length;
+}
+
+async function ctlFiles() {
+  const ul = $('ctlFiles');
+  try {
+    const { files } = await ctlCall('/files');
+    ul.replaceChildren(...(files.length ? files.map((f) => {
+      const li = document.createElement('li'), n = document.createElement('span'), d = document.createElement('span');
+      const b = document.createElement('button');
+      n.className = 'n'; n.textContent = f.name; n.title = f.path;
+      d.className = 'd';
+      d.textContent = [f.date ? new Date(f.date * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '',
+        f.size ? `${(f.size / 1e6).toFixed(1)} MB` : ''].filter(Boolean).join(' · ');
+      b.type = 'button'; b.textContent = 'Print';
+      b.addEventListener('click', () => ctlDo(`Print ${f.name}?\n\nIs the build plate clear?`, '/print',
+        { method: 'POST', body: JSON.stringify({ path: f.path }), headers: { 'Content-Type': 'application/json' } },
+        `Printing ${f.name}`));
+      li.append(n, d, b);
+      return li;
+    }) : [Object.assign(document.createElement('li'), { className: 'muted', textContent: 'No files on the printer' })]));
+  } catch (e) {
+    ul.replaceChildren(Object.assign(document.createElement('li'), { className: 'muted', textContent: e.message }));
+  }
+  ctlButtons();
+}
+
+async function ctlDo(question, path, opts, done) {
+  if (question && !confirm(question)) return;
+  ctl.busy = true; ctlButtons(); say('…');
+  try { await ctlCall(path, opts); say(done); } catch (e) { say(e.message, true); if (e.status === 401) ctlInfo(); }
+  ctl.busy = false; ctlButtons();
+}
+
+bCtl.addEventListener('click', async () => {
+  ctlPanel.hidden = !ctlPanel.hidden;
+  bCtl.setAttribute('aria-pressed', String(!ctlPanel.hidden));
+  if (ctlPanel.hidden) return;
+  lapsePanel.hidden = true;                               // one panel at a time (same place)
+  bLapse.setAttribute('aria-pressed', 'false');
+  say('');
+  const info = await ctlInfo();
+  if (info?.allowed) ctlFiles();
+});
+$('ctlLock').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  ctl.pw = $('ctlPw').value;
+  try { sessionStorage.setItem('printtwin-pw', ctl.pw); } catch { /* storage blocked */ }
+  const info = await ctlInfo();
+  if (info?.allowed) { say(''); ctlFiles(); } else say('Wrong password', true);
+});
+const POST = { method: 'POST' };
+$('ctlPause').addEventListener('click', () => ctlDo('', '/pause', POST, 'Paused'));
+$('ctlResume').addEventListener('click', () => ctlDo('', '/resume', POST, 'Resumed'));
+$('ctlStop').addEventListener('click', () => ctlDo('Stop the print? It can\'t be resumed.', '/stop', POST, 'Stopped'));
+$('ctlReload').addEventListener('click', ctlFiles);
+$('ctlFile').addEventListener('change', ctlButtons);
+$('ctlSend').addEventListener('click', () => {
+  const f = $('ctlFile').files[0];
+  if (!f) return;
+  const start = $('ctlStart').checked && !$('ctlStart').disabled;
+  if (start && !confirm(`Upload and print ${f.name}?\n\nIs the build plate clear?`)) return;
+  // XMLHttpRequest: fetch() can't tell how far an upload is
+  const x = new XMLHttpRequest();
+  x.open('PUT', `${apiBase()}/control/upload?name=${encodeURIComponent(f.name)}&print=${start ? 1 : 0}`);
+  for (const [k, v] of Object.entries(ctlHeaders())) x.setRequestHeader(k, v);
+  x.upload.onprogress = (e) => { if (e.lengthComputable) say(`Uploading … ${Math.round(100 * e.loaded / e.total)} %`); };
+  x.upload.onload = () => say('Sending it to the printer …');
+  x.onload = () => {
+    let body = {};
+    try { body = JSON.parse(x.responseText); } catch { /* not JSON */ }
+    if (x.status < 300) { say(start ? `Printing ${f.name}` : `${f.name} is on the printer`); $('ctlFile').value = ''; ctlFiles(); }
+    else say(body.error || `HTTP ${x.status}`, x.status !== 0);
+    ctl.busy = false; ctlButtons();
+  };
+  x.onerror = () => { say('Upload failed (connection lost)', true); ctl.busy = false; ctlButtons(); };
+  ctl.busy = true; ctlButtons(); say('Uploading …');
+  x.send(f);
+});
+
 // ------------------------------------------------------------------ frame loop
 let lastFrame = performance.now(), lastHud = 0;
 const tmpV = new THREE.Vector3();
@@ -1101,6 +1223,7 @@ async function init() {
     setTimeout(init, 3000);
     return;
   }
+  ctlInfo();
   const es = new EventSource(`/api/p/${encodeURIComponent(pid)}/events`);
   es.addEventListener('state', (e) => onState(JSON.parse(e.data)));
   es.addEventListener('pos', (e) => onPos(JSON.parse(e.data)));

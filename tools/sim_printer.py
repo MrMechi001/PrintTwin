@@ -140,6 +140,8 @@ def main():
     ap.add_argument("--seed", type=int, default=1, help="Pi: which z-hop reports (random, the same per seed)")
     ap.add_argument("--no-printer", type=float, default=0.0, help="Pi: 503 for the first S seconds")
     ap.add_argument("--no-id", type=float, default=0.0, help="Pi: no job id for the first S seconds")
+    ap.add_argument("--control", nargs="?", const="1", default="",
+                    help="printer control on in the bridge (a value: also its password for other devices)")
     a = ap.parse_args()
     a.pi = a.pi or a.type in PI_TYPES
     a.type = a.type or ("1.3.1" if a.pi else "1.4.0")
@@ -173,6 +175,8 @@ def main():
                        short=f"SIMJOB~{n}" + (".BGC" if ext == ".bgcode" else ".GCO"))
 
     start_job(a.job)
+    shutil.copyfile(a.job, SIM / "usb" / a.job.name)      # on the "USB stick" too (control: print again)
+    run = {"state": "PRINTING"}                            # PAUSED / STOPPED by printer control (not --pi)
 
     def z_now():
         layers = job["layers"]
@@ -247,6 +251,8 @@ def main():
             """PrusaLink upload (what PrusaSlicer / OrcaSlicer send): PUT /api/v1/files/usb/<name>."""
             if not self._key_ok():
                 return
+            if not a.pi and self._control_put():
+                return
             n = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(n)
             if not self.path.startswith("/api/v1/files/usb/") or len(body) != n:
@@ -259,9 +265,53 @@ def main():
             print(f"fake printer: upload {dst.name} {n} bytes{', printing it' if started else ''}", flush=True)
             if started:
                 start_job(dst)
+                run["state"] = "PRINTING"
             self.send_response(201)
             self.send_header("Content-Length", "0")
             self.end_headers()
+
+        def _done(self, code=204):
+            self.send_response(code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_POST(self):
+            """Printer control: POST /api/v1/files/usb/<name> prints that file."""
+            if not self._key_ok():
+                return
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            f = SIM / "usb" / Path(unquote(self.path)).name
+            if a.pi or not self.path.startswith("/api/v1/files/usb/") or not f.is_file():
+                return self._json({"title": "Not Found"}, 404)
+            if run["state"] in ("PRINTING", "PAUSED"):
+                return self._json({"title": "Conflict", "message": "Printer is busy"}, 409)
+            start_job(f)
+            run["state"] = "PRINTING"
+            print(f"fake printer: printing {f.name}", flush=True)
+            self._done()
+
+        def do_DELETE(self):
+            """Printer control: DELETE /api/v1/job/<id> stops the print."""
+            if not self._key_ok():
+                return
+            if a.pi or self.path != f"/api/v1/job/{job['id']}" or run["state"] not in ("PRINTING", "PAUSED"):
+                return self._json({"title": "Conflict"}, 409)
+            run["state"] = "STOPPED"
+            print("fake printer: stopped", flush=True)
+            self._done()
+
+        def _control_put(self) -> bool:
+            m = re.fullmatch(r"/api/v1/job/(\d+)/(pause|resume)", self.path)
+            if not m:
+                return False
+            want = "PRINTING" if m.group(2) == "pause" else "PAUSED"
+            if int(m.group(1)) != job["id"] or run["state"] != want:
+                self._json({"title": "Conflict"}, 409)
+            else:
+                run["state"] = "PAUSED" if m.group(2) == "pause" else "PRINTING"
+                print(f"fake printer: {m.group(2)}", flush=True)
+                self._done()
+            return True
 
         def do_GET(self):
             with lock:
@@ -281,19 +331,26 @@ def main():
             if self.path == "/api/v1/storage":
                 return self._json({"storage_list": [{"path": "/usb", "name": "usb", "type": "USB", "read_only": False,
                                                      "free_space": 30 << 30, "available": True}]})
+            if self.path.rstrip("/") == "/api/v1/files/usb":
+                kids = [{"name": f.name, "display_name": f.name, "type": "PRINT_FILE", "size": f.stat().st_size,
+                         "m_timestamp": int(f.stat().st_mtime), "ro": False} for f in sorted((SIM / "usb").iterdir())]
+                return self._json({"name": "usb", "type": "FOLDER", "ro": False, "children": kids})
             if self.path == "/api/v1/status":
-                return self._json({
-                    "printer": {"state": "PRINTING", "temp_nozzle": 215.0 if printing else 180.0,
-                                "target_nozzle": 215.0, "temp_bed": 60.0, "target_bed": 60.0,
-                                "axis_z": z, "fan_hotend": 7000, "fan_print": 60, "speed": 100, "flow": 100},
-                    "job": {"id": job["id"], "progress": round(100 * prog, 1),
-                            "time_remaining": int((len(layers) * a.layer) * (1 - prog)),
-                            "time_printing": int(max(0, time.time() - t0))}})
+                st = {"printer": {"state": run["state"], "temp_nozzle": 215.0 if printing else 180.0,
+                                  "target_nozzle": 215.0, "temp_bed": 60.0, "target_bed": 60.0,
+                                  "axis_z": z, "fan_hotend": 7000, "fan_print": 60, "speed": 100, "flow": 100}}
+                if run["state"] != "STOPPED":
+                    st["job"] = {"id": job["id"], "progress": round(100 * prog, 1),
+                                 "time_remaining": int((len(layers) * a.layer) * (1 - prog)),
+                                 "time_printing": int(max(0, time.time() - t0))}
+                return self._json(st)
             if self.path == "/api/version":
                 return self._json({"api": "2.0.0", "server": "sim", "text": "PrusaLink", "hostname": "sim",
                                    "firmware": "sim", "printer": a.type, "capabilities": {"upload-by-put": True}})
+            if self.path == "/api/v1/job" and run["state"] == "STOPPED":
+                return self._done()                               # no job (PrusaLink: 204)
             if self.path == "/api/v1/job":
-                return self._json({"id": job["id"], "state": "PRINTING", "progress": round(100 * prog, 1),
+                return self._json({"id": job["id"], "state": run["state"], "progress": round(100 * prog, 1),
                                    "file": {"name": short, "display_name": job["path"].name, "size": len(data),
                                             "m_timestamp": job["m_ts"], "refs": {"download": f"/usb/{short}"}}})
             if self.path == f"/usb/{short}" and time.time() - t0 < a.refuse:
@@ -375,7 +432,9 @@ def main():
         f'host = "127.0.0.1:{a.printer_port}"\n{login}\n'
         f'[server]\nlisten_host = "127.0.0.1"\nport = {a.port}\n\n'
         f'[metrics]\nlisten_host = "127.0.0.1"\nlisten_port = {a.printer_port + 1}\n\n'
-        f'[slicer]\nprint_host = true\n', encoding="utf-8")
+        f'[slicer]\nprint_host = true\n\n'
+        f'[control]\nenabled = {"true" if a.control else "false"}\n'
+        + (f'password = "{a.control}"\n' if a.control not in ("", "1") else ""), encoding="utf-8")
     from printtwin.__main__ import main as bridge
     bridge(["--config", str(cfg)])
 
