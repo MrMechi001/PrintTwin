@@ -10,6 +10,18 @@
 * A print queue in the 3D view.
 * Setup page in the browser, Windows package.
 
+## Unreleased
+
+* **Bambu Lab: the nozzle moves like the real one.** The position (Bambu printers report none) now
+  follows the job's own timing – feed rates, accelerations, slowing down at corners, travels –
+  at the speed the print really runs, learnt from the printer's reports (Sport / Ludicrous mode
+  included). Every new layer or percent, part-fan change and AMS filament change puts it back on
+  the spot in the G-code where that happens. Before, it moved evenly through the G-code lines
+  between the printer's progress marks: slow in curves, jumping on long infill lines. On a
+  simulated print that runs up to 30 % off plan it is within 1 s of the real nozzle about 60 % of
+  the time instead of 37 %. Only Bambu printers parse the timing (job files load as fast as before
+  for the others).
+
 ## 0.9.0 – Control your printer
 
 * **Printer control in the 3D view** (opt-in, `[control] enabled = true`): pause, resume and stop

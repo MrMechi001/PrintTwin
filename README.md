@@ -29,7 +29,7 @@ PrintTwin started on the Original Prusa MK4 – **support for more printers is i
 | Prusa CORE One / CORE One L | PrusaLink + firmware metrics | 🧪 should work today – **testers wanted**; generic CoreXY model until their own is done |
 | **Klipper printers** (Voron 2.4 / Trident / V0, Sovol SV08, RatRig, Creality K1, Qidi, Elegoo, … – anything with Moonraker) | Moonraker | 🧪 new – tested against a simulated Moonraker, **testers wanted**; generic CoreXY (bed or flying gantry) or bed-slinger model |
 | OctoPrint printers (Ender 3 …) | OctoPrint API | 📋 planned |
-| **Bambu Lab** (X1, P1, P2S, X2D, A1, A1 mini, A2L, H2D/H2S/H2C) | MQTT + FTPS on the local network (read-only) | 🧪 new – tested against a simulated printer, **testers wanted**; position *estimated* from layer and progress (Bambu printers report no nozzle position); generic CoreXY / bed-slinger model |
+| **Bambu Lab** (X1, P1, P2S, X2D, A1, A1 mini, A2L, H2D/H2S/H2C) | MQTT + FTPS on the local network (read-only) | 🧪 new – tested against a simulated printer, **testers wanted**; position *estimated* by the job's own timing, put right at every layer, percent, part-fan and AMS change (Bambu printers report no nozzle position); generic CoreXY / bed-slinger model |
 | True-to-size models for the *Printer* view: CORE One, CORE One L, Bambu Lab; the XL refined | – | 📋 planned |
 
 PrintTwin asks the printer which model it is (PrusaLink), so the *Printer* view picks the
@@ -159,8 +159,13 @@ access_code = "12345678"      # printer screen: Settings -> Network / WLAN (LAN 
 
 PrintTwin only **reads**: the status over MQTT and the job file over FTPS – no printer control,
 no Bambu cloud, no Developer Mode needed. Bambu printers report the layer and the percent of the
-print but **no nozzle position**, so the position in the 3D view is *estimated* between the
-slicer's progress marks in the job (the HUD says so) – coarser than on a Prusa or Klipper printer.
+print but **no nozzle position**, so the position in the 3D view is *estimated* (the HUD says so):
+the nozzle follows the job's own timing (feed rates, accelerations, corners) at the speed the print
+really runs – learnt from the printer's reports, Sport / Ludicrous mode included – and every new
+layer or percent, every part-fan change and every AMS filament change puts it back on the spot in
+the G-code where that happens. On a simulated print that runs up to 30 % off plan it is within 1 s
+of the real nozzle about 60 % of the time (the earlier estimate: 37 %); still coarser than on a
+Prusa or Klipper printer, which report where the nozzle is.
 The printer model comes from the serial number.
 
 The job file: X1, P1 and A1 keep it where PrintTwin can download it. The H2D / H2S / H2C, P2S and
@@ -422,7 +427,8 @@ adapters: see [CONTRIBUTING.md](CONTRIBUTING.md).
 * `python -I tests/test_toolpath.py` – parser: `.gcode` == `.bgcode`, other slicers,
   incremental decoding; `python -I tests/test_bridge.py` – end-to-end with a simulated printer;
   `tests/test_slicerhost.py` – the slicer print host; `tests/test_bambu.py` – Bambu Lab printers
-  end to end; `tests/test_mqtt.py` – the MQTT client; `tests/test_moonraker.py` – Klipper
+  end to end; `tests/test_bambu_time.py` – the Bambu position estimate by the job's timing;
+  `tests/test_mqtt.py` – the MQTT client; `tests/test_moonraker.py` – Klipper
   printers end to end; `tests/test_mk3.py` – MK3 / MK3S+ with PrusaLink on a Raspberry Pi (digest
   login, SD-card jobs, the estimated position) and the MK4's live metrics; `tests/test_models.py` –
   printer detection; `tests/test_glb_models.py` – the 3D printer models.

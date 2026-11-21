@@ -55,6 +55,7 @@ class BasePrinter:
     """Everything that doesn't depend on how the printer is asked: see the module docstring."""
     kind = "?"
     poll_s = POLL_S
+    timed = False                     # parse the job's own timing (printers that report no position)
     tracker_args: dict = {}                  # Tracker(window_back=..., sdpos_lag=...) for this kind
 
     def __init__(self, cfg: dict, cache_dir: Path, incoming_dir: Path = incoming.INCOMING):
@@ -306,14 +307,14 @@ class BasePrinter:
                         raise _Superseded()
                     self.loading = {"phase": "parse", "source": source}
                 self.publish_state()
-                self._install(load_file(path, job.get("plate"), job.get("layers")), key, gen, job)
+                self._install(load_file(path, job.get("plate"), job.get("layers"), self.timed), key, gen, job)
                 log(self.id, f"toolpath from {source} in {time.time() - t0:.1f} s")
                 return
             why = self._not_downloadable(job)
             if why:
                 raise NotDownloadable(why)
 
-            dec = JobDecoder(plate=job.get("plate"), layers=job.get("layers"))
+            dec = JobDecoder(plate=job.get("plate"), layers=job.get("layers"), timed=self.timed)
             # a new job clears the old model at once; a retry of a refused download shows the
             # model only once data arrives (not a fresh empty one on every attempt)
             installed = not (self._retry and self._retry[0] == key)

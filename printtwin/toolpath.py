@@ -58,6 +58,11 @@ TYPE_LOOKUP = {t.lower(): TYPE_ID[t] for t in TYPES}
 TYPE_LOOKUP.update({k: TYPE_ID[v] for k, v in _ALIASES.items()})
 
 ARC_STEP_MM = 0.4          # chord length used to flatten G2/G3 arcs
+# time model (for printers that report no position: the estimate follows the job's own timing)
+ACCEL_DEFAULT = 5000.0     # mm/s² until the file sets one (M204)
+V_MAX = 1000.0             # mm/s, above any printer's limit
+V_CORNER = 5.0             # mm/s a sharp corner is still taken at (square-corner / junction speed)
+FEED_DEFAULT = 1800.0      # mm/min until the file sets one
 MIN_LAYER_STEP = 0.05      # Z rise that starts a new layer when a file has no markers
 META_KEYS = ("filament_colour", "bed_shape", "printer_model", "filament_type", "layer_height", "nozzle_diameter",
              "printer_structure", "printable_height")
@@ -103,6 +108,13 @@ class Toolpath:
     layer_marks: list = field(default_factory=list)     # [segment index, layer number]
     progress_marks: list = field(default_factory=list)  # [segment index, percent]
     silent_marks: list = field(default_factory=list)    # [segment index, percent in stealth mode]
+    # the job's own timing: model seconds at the start / end of each segment (feed rates, M204
+    # accelerations, slowing down at corners, G4 dwells; heating and homing take no model time)
+    t0: array = field(default_factory=lambda: array("f"))
+    t1: array = field(default_factory=lambda: array("f"))
+    t_total: float = 0.0
+    timed: bool = True          # with t0 / t1 (only printers without a position need them: costs ~30 %)
+    fan_marks: list = field(default_factory=list)       # [segment index, fan (1 part, 2 aux, 3 chamber), S 0-255]
     meta: dict = field(default_factory=dict)
     text_size: int = 0
     complete: bool = False      # False while the job file is still arriving
@@ -119,6 +131,13 @@ class Toolpath:
     def count(self) -> int:
         # `type` is appended last for every segment, so start/end/wh always hold at least this many
         return len(self.type)
+
+    def time_at(self, i: int) -> float:
+        """Model time when segment i starts (the end of the job for i >= count)."""
+        n = min(self.count, len(self.t0))
+        if i < n:
+            return float(self.t0[max(0, i)])
+        return self.t_total if self.complete or not n else float(self.t1[n - 1])
 
     def _scan(self):
         n = self.count
@@ -201,7 +220,11 @@ class GcodeParser:
         self._rest = b""
         self._offset = 0
         self._s = {"x": 0.0, "y": 0.0, "z": 0.0, "abs_xyz": True, "abs_e": False, "e_abs_last": 0.0,
-                   "cur_type": TYPE_ID["Custom"], "width": default_width, "height": 0.2, "saw_height": False}
+                   "cur_type": TYPE_ID["Custom"], "width": default_width, "height": 0.2, "saw_height": False,
+                   # time model: clock, feed, accelerations (print / travel), speed + direction + accel
+                   # at the end of the last move, the segment count right after the last extruding move
+                   "t": 0.0, "feed": FEED_DEFAULT, "acc_p": ACCEL_DEFAULT, "acc_t": ACCEL_DEFAULT,
+                   "vp": 0.0, "pu": (0.0, 0.0, 0.0), "ap": ACCEL_DEFAULT, "seg_end": -1, "fans": {}}
 
     def feed(self, data: bytes):
         if not data:
@@ -216,6 +239,7 @@ class GcodeParser:
         self._rest = b""
         tp = self.tp
         tp.text_size = self._offset - 1
+        tp.t_total = self._s["t"]
         if not tp.layer_z:
             _derive_layers(tp)
             tp.rewritten = tp.rewritten or bool(tp.layer_z)
@@ -231,12 +255,19 @@ class GcodeParser:
         x, y, z = s["x"], s["y"], s["z"]
         abs_xyz, abs_e, e_abs_last = s["abs_xyz"], s["abs_e"], s["e_abs_last"]
         cur_type, width, height, saw_height = s["cur_type"], s["width"], s["height"], s["saw_height"]
+        t0s, t1s, fans, timed = tp.t0, tp.t1, s["fans"], tp.timed
+        t, feed, acc_p, acc_t = s["t"], s["feed"], s["acc_p"], s["acc_t"]
+        vp, pu, ap, seg_end = s["vp"], s["pu"], s["ap"], s["seg_end"]
+        vmax, vcorner, sqrt = V_MAX, V_CORNER, math.sqrt
 
-        def add(x0, y0, z0, x1, y1, z1, off):
+        def add(x0, y0, z0, x1, y1, z1, off, ta, tb):
             st.extend((x0, y0, z0))
             en.extend((x1, y1, z1))
             wh.extend((width, height))
             lo.append(off)
+            if timed:
+                t0s.append(ta)
+                t1s.append(tb)
             ty.append(cur_type)          # last: Toolpath.count = len(type)
 
         offset = self._offset
@@ -320,16 +351,76 @@ class GcodeParser:
                     e = w.get(b"E")
                     if e is not None and abs_e:
                         e, e_abs_last = e - e_abs_last, e
-                    if e and e > 0 and (nx != x or ny != y):
-                        if g >= 2 and (b"I" in w or b"J" in w):
-                            cx, cy = x + w.get(b"I", 0.0), y + w.get(b"J", 0.0)
-                            r = math.hypot(x - cx, y - cy)
-                            a0 = math.atan2(y - cy, x - cx)
-                            sweep = math.atan2(ny - cy, nx - cx) - a0
-                            if g == 2 and sweep >= 0:
-                                sweep -= 2 * math.pi
-                            elif g == 3 and sweep <= 0:
-                                sweep += 2 * math.pi
+                    fv = w.get(b"F")
+                    if fv and fv > 0:
+                        feed = fv
+                    ext = bool(e and e > 0 and (nx != x or ny != y))
+                    if not (ext or timed):
+                        x, y, z = nx, ny, nz
+                        continue
+                    dx, dy, dz = nx - x, ny - y, nz - z
+                    arc = None
+                    if g >= 2 and (b"I" in w or b"J" in w) and (dx or dy):
+                        cx, cy = x + w.get(b"I", 0.0), y + w.get(b"J", 0.0)
+                        r = math.hypot(x - cx, y - cy)
+                        a0 = math.atan2(y - cy, x - cx)
+                        sweep = math.atan2(ny - cy, nx - cx) - a0
+                        if g == 2 and sweep >= 0:
+                            sweep -= 2 * math.pi
+                        elif g == 3 and sweep <= 0:
+                            sweep += 2 * math.pi
+                        arc = (cx, cy, r, a0, sweep)
+                    # time of the move: accelerate from the corner speed to the feed rate (the head
+                    # brakes into the corner at the end of the previous move)
+                    dt = length = 0.0
+                    if timed:
+                        if arc:
+                            length = math.hypot(abs(sweep) * r, dz)
+                            sg = 1.0 if sweep > 0 else -1.0         # direction of travel along the arc
+                            u0 = (-sg * math.sin(a0), sg * math.cos(a0), 0.0)
+                            u1 = (-sg * math.sin(a0 + sweep), sg * math.cos(a0 + sweep), 0.0)
+                        else:
+                            length = sqrt(dx * dx + dy * dy + dz * dz)
+                            u0 = u1 = (dx / length, dy / length, dz / length) if length > 0 else pu
+                    if not timed:
+                        pass
+                    elif length > 1e-9:
+                        v = feed / 60.0
+                        v = vmax if v > vmax else 0.5 if v < 0.5 else v
+                        a = acc_p if ext else acc_t
+                        vj = 0.0
+                        if vp > 0.0:
+                            cs = u0[0] * pu[0] + u0[1] * pu[1] + u0[2] * pu[2]
+                            vlow = vp if vp < v else v
+                            vj = vlow * cs * cs if cs > 0.0 else 0.0
+                            if vlow > vcorner:
+                                vlow = vcorner
+                            if vj < vlow:
+                                vj = vlow
+                            if vp > vj:
+                                pen = (vp - vj) * (vp - vj) / (2.0 * ap * vp)
+                                t += pen
+                                if seg_end == len(ty) and t1s:
+                                    t1s[-1] += pen
+                        d_acc = (v * v - vj * vj) / (2.0 * a)
+                        if length >= d_acc:
+                            dt = length / v + (v - vj) * (v - vj) / (2.0 * a * v)
+                            vp = v
+                        else:
+                            vp = sqrt(vj * vj + 2.0 * a * length)
+                            dt = (vp - vj) / a
+                        pu, ap = u1, a
+                    elif e:                                         # retract / unretract: the head stands
+                        if vp > 0.0:
+                            t += vp / (2.0 * ap)
+                            if seg_end == len(ty) and t1s:
+                                t1s[-1] += vp / (2.0 * ap)
+                            vp = 0.0
+                        fe = feed / 60.0
+                        dt = abs(e) / (fe if fe > 0.5 else 0.5)
+                    if ext:
+                        if arc:
+                            cx, cy, r, a0, sweep = arc
                             n = max(1, math.ceil(abs(sweep) * r / ARC_STEP_MM))
                             px, py, pz = x, y, z
                             for i in range(1, n + 1):
@@ -339,11 +430,26 @@ class GcodeParser:
                                     a = a0 + sweep * i / n
                                     qx, qy = cx + r * math.cos(a), cy + r * math.sin(a)
                                 qz = z + (nz - z) * i / n
-                                add(px, py, pz, qx, qy, qz, line_off)
+                                add(px, py, pz, qx, qy, qz, line_off, t + dt * (i - 1) / n, t + dt * i / n)
                                 px, py, pz = qx, qy, qz
                         else:
-                            add(x, y, z, nx, ny, nz, line_off)
+                            add(x, y, z, nx, ny, nz, line_off, t, t + dt)
+                        seg_end = len(ty)
+                    else:
+                        seg_end = -1
+                    t += dt
                     x, y, z = nx, ny, nz
+                elif g == 4 and timed:                   # dwell: the head stops, then waits
+                    w = {k: float(v) for k, v in _WORD.findall(code, m.end())}
+                    if vp > 0.0:
+                        t += vp / (2.0 * ap)
+                        if seg_end == len(ty) and t1s:
+                            t1s[-1] += vp / (2.0 * ap)
+                        vp = 0.0
+                    t += max(0.0, w.get(b"P", 0.0)) / 1000.0 + max(0.0, w.get(b"S", 0.0))
+                    seg_end = -1
+                elif g in (28, 29):                      # homing / probing: from standstill afterwards
+                    vp, seg_end = 0.0, -1
                 elif g == 90:
                     abs_xyz = True
                 elif g == 91:
@@ -367,6 +473,24 @@ class GcodeParser:
                             pc = int(float(v))
                             if not marks or marks[-1][1] != pc:
                                 marks.append((len(ty), pc))
+                elif raw.startswith(b"M204 "):           # accelerations: S both, P print, T travel
+                    for k, v in _WORD.findall(raw.split(b";", 1)[0], 4):
+                        acc = float(v)
+                        if acc > 0:
+                            if k == b"S":
+                                acc_p = acc_t = acc
+                            elif k == b"P":
+                                acc_p = acc
+                            elif k == b"T":
+                                acc_t = acc
+                elif raw.startswith((b"M106", b"M107")) and (len(raw) == 4 or raw[4] in (32, 9, 59)):
+                    words = dict(_WORD.findall(raw.split(b";", 1)[0], 4))
+                    fan = int(float(words.get(b"P", b"1")))
+                    fan = 1 if fan <= 1 else fan                     # P0 / P1 / none: the part fan
+                    sval = 0.0 if raw[3] == 55 else float(words.get(b"S", b"255"))   # M107: off
+                    if fans.get(fan) != sval:
+                        fans[fan] = sval
+                        tp.fan_marks.append((len(ty), fan, sval))
                 elif raw.startswith(b"M1020 ") and b"S" in raw:   # H2D / H2C: filament change "M1020 S<n>"
                     m1020 = re.search(rb"S(\d+)", raw.split(b";", 1)[0])
                     if m1020:
@@ -385,7 +509,8 @@ class GcodeParser:
 
         self._offset = offset
         s.update(x=x, y=y, z=z, abs_xyz=abs_xyz, abs_e=abs_e, e_abs_last=e_abs_last,
-                 cur_type=cur_type, width=width, height=height, saw_height=saw_height)
+                 cur_type=cur_type, width=width, height=height, saw_height=saw_height,
+                 t=t, feed=feed, acc_p=acc_p, acc_t=acc_t, vp=vp, pu=pu, ap=ap, seg_end=seg_end)
 
 
 def parse_gcode(text: bytes, default_width: float = 0.45) -> Toolpath:
@@ -434,8 +559,8 @@ class JobDecoder:
     (the printer's total layer count), else plate 1 (meta["plate_guess"]).
     """
 
-    def __init__(self, plate: int | None = None, layers: int | None = None):
-        self.tp = Toolpath()
+    def __init__(self, plate: int | None = None, layers: int | None = None, timed: bool = True):
+        self.tp = Toolpath(timed=timed)
         self.plate = plate
         self.layers = layers
         self.fmt: str | None = None          # "bgcode" | "gcode" | "3mf"
@@ -687,11 +812,11 @@ def _scan_meta(meta: dict, text: bytes):
             meta[key] = m.group(1).decode("utf-8", "replace").strip()
 
 
-def decode_bytes(buf: bytes, plate: int | None = None, layers: int | None = None) -> Toolpath:
-    d = JobDecoder(plate=plate, layers=layers)
+def decode_bytes(buf: bytes, plate: int | None = None, layers: int | None = None, timed: bool = True) -> Toolpath:
+    d = JobDecoder(plate=plate, layers=layers, timed=timed)
     d.feed(buf)
     return d.finish()
 
 
-def load_file(path: Path, plate: int | None = None, layers: int | None = None) -> Toolpath:
-    return decode_bytes(Path(path).read_bytes(), plate, layers)
+def load_file(path: Path, plate: int | None = None, layers: int | None = None, timed: bool = True) -> Toolpath:
+    return decode_bytes(Path(path).read_bytes(), plate, layers, timed)

@@ -6,7 +6,9 @@ Built from the protocol as the open-source integrations document it (see printtw
         in X1 style everything
   FTPS  implicit TLS, vsFTPd-like: USER/PASS, PBSZ/PROT, PASV/EPSV, LIST, SIZE, MDTM, REST, RETR
   print PREPARE (heating) -> RUNNING, layer_num / mc_percent / mc_remaining_time taken from the job's
-        own "M73 L" / "M73 P" marks -> FINISH
+        own "M73 L" / "M73 P" marks -> FINISH; the nozzle moves by the job's own timing (stretched to
+        --duration; --jitter 0.3 makes each layer up to 30 % faster or slower than planned, like a
+        real printer), the part / aux fan (M106) and the AMS slot (T<n>) are reported as they change
 Certificates: a throwaway CA and a device certificate with CN = the serial (needs the openssl tool).
 
 usage: python -I tools/sim_bambu.py JOB [--serial 01P00A000000001] [--style p1|x1] [--duration 60]
@@ -24,6 +26,7 @@ usage: python -I tools/sim_bambu.py JOB [--serial 01P00A000000001] [--style p1|x
   --repeat     print the job a second time after it finished (same name, file and task id);
                --then JOB2 prints JOB2 the second time (re-sliced under the same name)
   --stale OLD  an earlier print's file with the same name is on the printer (9 days old)
+  --jitter J   each layer takes up to J (0.3 = 30 %) longer or shorter than the job's timing says
 Viewer: http://localhost:<port>/
 """
 from __future__ import annotations
@@ -40,6 +43,7 @@ import sys
 import threading
 import time
 import zipfile
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -72,14 +76,30 @@ def make_certs(folder: Path, serial: str) -> tuple[Path, Path, Path]:
 class Print:
     """The simulated job: its marks, and where it is at a given time."""
 
-    def __init__(self, job_3mf: Path, name: str, heat: float, duration: float, t0: float | None = None):
+    def __init__(self, job_3mf: Path, name: str, heat: float, duration: float, t0: float | None = None,
+                 jitter: float = 0.0):
         self.path, self.name, self.heat, self.duration = job_3mf, name, heat, duration
-        tp = load_file(job_3mf)
+        self.tp = tp = load_file(job_3mf)
         self.n = max(1, tp.count)
         self.layer_marks = tp.layer_marks or [(s, i + 1) for i, s in enumerate(tp.layer_start)]
         self.progress_marks = tp.progress_marks
         self.total_layers = tp.meta.get("total_layers") or len(tp.layer_z)
         self.t0 = time.time() if t0 is None else t0
+        self.lm_segs = [s for s, _ in self.layer_marks]
+        self.pm_segs = [s for s, _ in self.progress_marks]
+        self.fans = {f: [(s, v) for s, ff, v in tp.fan_marks if ff == f] for f in (1, 2)}
+        self.tools = tp.tool_changes
+        # real time -> model time: per layer, the job's timing stretched by its own factor
+        starts = sorted({0, *[s for s, _ in self.layer_marks if 0 < s < tp.count]})
+        tm = [tp.time_at(s) for s in starts] + [tp.t_total]
+        self.timed = tp.t_total > 0 and len(tp.t1) == tp.count
+        fac = [1.0 + jitter * (((i * 7919) % 13) / 6.0 - 1.0) for i in range(len(starts))]   # repeatable
+        real = [0.0]
+        for i in range(len(starts)):
+            real.append(real[-1] + (tm[i + 1] - tm[i]) * fac[i])
+        k = duration / real[-1] if real[-1] > 0 else 1.0
+        self.real = [r * k for r in real]
+        self.model = tm
 
     @property
     def end(self) -> float:
@@ -97,12 +117,36 @@ class Print:
             return {"gcode_state": "FINISH", "gcode_file_prepare_percent": "100", "mc_percent": 100,
                     "layer_num": self.total_layers, "mc_remaining_time": 0, "nozzle_temper": 220.0,
                     "nozzle_target_temper": 0.0, "bed_temper": 55.0, "bed_target_temper": 0.0}
-        seg = run / self.duration * self.n
-        layer = max([v for s, v in self.layer_marks if s <= seg] or [1])
-        pct = max([v for s, v in self.progress_marks if s <= seg] or [0])
-        return {"gcode_state": "RUNNING", "gcode_file_prepare_percent": "100", "mc_percent": pct,
-                "layer_num": layer, "mc_remaining_time": int((self.duration - run) / 60) + 1,
-                "nozzle_temper": 220.0, "nozzle_target_temper": 220.0, "bed_temper": 55.0, "bed_target_temper": 55.0}
+        seg = self.seg_at(run)
+        i = int(seg)
+        layer = max([v for s, v in self.layer_marks[:bisect_right(self.lm_segs, i)]] or [1])
+        pct = max([v for s, v in self.progress_marks[:bisect_right(self.pm_segs, i)]] or [0])
+        out = {"gcode_state": "RUNNING", "gcode_file_prepare_percent": "100", "mc_percent": pct,
+               "layer_num": layer, "mc_remaining_time": int((self.duration - run) / 60) + 1,
+               "nozzle_temper": 220.0, "nozzle_target_temper": 220.0, "bed_temper": 55.0, "bed_target_temper": 55.0,
+               "sim_seg": round(seg, 2)}                      # the true position (not sent by real printers)
+        for f, key in ((1, "cooling_fan_speed"), (2, "big_fan1_speed")):
+            done = [v for s, v in self.fans[f] if s <= i]
+            if done:
+                out[key] = str(round(done[-1] / 255 * 15))
+        done = [t for s, t in self.tools if s <= i]
+        if done:
+            out["ams"] = {"tray_now": str(done[-1])}
+        return out
+
+    def seg_at(self, run: float) -> float:
+        """Where the nozzle is after `run` seconds of printing (segment units)."""
+        if not self.timed:
+            return run / self.duration * self.n
+        j = max(0, min(bisect_right(self.real, run) - 1, len(self.model) - 2))
+        r0, r1, m0, m1 = self.real[j], self.real[j + 1], self.model[j], self.model[j + 1]
+        t = m0 + (run - r0) * ((m1 - m0) / (r1 - r0) if r1 > r0 else 0.0)
+        tp = self.tp
+        i = bisect_left(tp.t1, t)
+        if i >= tp.count:
+            return float(tp.count)
+        d = tp.t1[i] - tp.t0[i]
+        return i + (min(1.0, max(0.0, (t - tp.t0[i]) / d)) if d > 0 else 0.0)
 
 
 # ---------------------------------------------------------------- MQTT broker
@@ -419,6 +463,7 @@ def main():
     ap.add_argument("--then", type=Path)
     ap.add_argument("--gap", type=float, default=4.0, help="--repeat: seconds between the two prints")
     ap.add_argument("--stale", type=Path)
+    ap.add_argument("--jitter", type=float, default=0.0)
     ap.add_argument("--port", type=int, default=8796)
     ap.add_argument("--mqtt-port", type=int, default=18883)
     ap.add_argument("--ftps-port", type=int, default=18990)
@@ -440,8 +485,8 @@ def main():
     if a.then:
         staged2 = SIM / "job2.gcode.3mf"
         as_3mf(a.then, staged2)
-    pr = Print(staged, name, a.heat, a.duration)
-    runs = [pr] + ([Print(staged2, name, a.heat, a.duration, t0=pr.end + a.gap)] if a.repeat else [])
+    pr = Print(staged, name, a.heat, a.duration, jitter=a.jitter)
+    runs = [pr] + ([Print(staged2, name, a.heat, a.duration, t0=pr.end + a.gap, jitter=a.jitter)] if a.repeat else [])
 
     def handover(job_3mf: Path, n: int):            # what the post-processing hook would have stored
         with zipfile.ZipFile(job_3mf) as z:
@@ -482,8 +527,8 @@ def main():
         run = next((r for r in reversed(runs) if now >= r.t0), runs[0])     # the second print once it began
         s = run.at(now)
         gfile = "/data/Metadata/plate_1.gcode" if a.style == "x1" else f"{name}.gcode.3mf"
-        return {**s, "gcode_file": gfile, "subtask_name": name, "print_type": "local", "task_id": "0",
-                "total_layer_num": run.total_layers, "spd_lvl": 2, "spd_mag": 100, "cooling_fan_speed": "10",
+        return {"cooling_fan_speed": "10", **s, "gcode_file": gfile, "subtask_name": name, "print_type": "local",
+                "task_id": "0", "total_layer_num": run.total_layers, "spd_lvl": 2, "spd_mag": 100,
                 "heatbreak_fan_speed": "15", "plate_idx": 1, "print_error": 0, "mc_print_stage": "2"}
 
     MqttBroker(a.mqtt_port, sctx, a.serial, a.access_code, status, a.style)

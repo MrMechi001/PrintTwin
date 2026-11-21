@@ -2,9 +2,10 @@
 
 What the printer tells (MQTT, TLS on 8883, user "bblp" + the LAN access code, topic
 device/<serial>/report): state, temperatures, speed, fans, the layer number, the percent of the
-slicer's "M73 P" lines and the remaining minutes. No nozzle position and no file position on any
-model - so the place in the toolpath is ESTIMATED between the job's "M73 L" / "M73 P" marks
-(Tracker.estimate), and the viewer says so.
+slicer's "M73 P" lines, the remaining minutes and the AMS slot. No nozzle position and no file
+position on any model - so the place in the toolpath is ESTIMATED (tracker.TimeEstimate): it follows
+the job's own timing at the rate the print really runs, and every new layer / percent, part-fan or AMS
+change puts it back on the spot in the G-code where that happens. The viewer says it's estimated.
 
 A print is new whenever the printer goes into PREPARE / RUNNING / PAUSE with another job, or
 again after it ended (a reprint of the same file is a new print too). Its file comes from, best first:
@@ -41,6 +42,7 @@ from . import incoming, models, tlsutil
 from .ftps import FtpsBusy, FtpsClient
 from .mqtt import MqttClient, MqttError, SubscribeRefused
 from .printer import BasePrinter, log
+from .tracker import TimeEstimate
 from .toolpath import JobFileError
 
 STATES = {"RUNNING": "PRINTING", "PAUSE": "PAUSED", "FINISH": "FINISHED", "FAILED": "ERROR",
@@ -102,6 +104,7 @@ def _fuzzy(name: str) -> str:
 class BambuPrinter(BasePrinter):
     kind = "bambu"
     poll_s = 0.25                     # the estimate moves on between the printer's ~1 Hz reports
+    timed = True                      # the estimate follows the job's own timing
 
     def __init__(self, cfg: dict, cache_dir: Path, incoming_dir: Path = incoming.INCOMING):
         super().__init__(cfg, cache_dir, incoming_dir)
@@ -147,9 +150,7 @@ class BambuPrinter(BasePrinter):
         self._stalled = False                      # the last connection ended without reports (P1 broker stall?)
         self._reject_req: tuple | None = None      # (job, reason) from a load that found the file wrong
         self._gs = "IDLE"                          # gcode_state at the last poll
-        self._mark: tuple | None = None            # (layer, percent) and when it was first seen
-        self._mark_t = 0.0
-        self._paused_for = 0.0
+        self._est: TimeEstimate | None = None      # the position estimate of the loaded toolpath
 
     # ------------------------------------------------------------------ MQTT
     def start(self):
@@ -346,7 +347,7 @@ class BambuPrinter(BasePrinter):
                 "time_printing": None},
         }
         self._gs = gs
-        self._estimate(gs, layer, _num(p.get("mc_percent")), _num(p.get("mc_remaining_time")))
+        self._estimate(gs, p)
         return status
 
     def _new_print(self, p: dict, ident: tuple, name: str, raw: str, gfile: str, now: float):
@@ -406,6 +407,8 @@ class BambuPrinter(BasePrinter):
         ctx = self._ctx
         if snap["job"] is None and ctx and self._ident is not None:    # the print runs, its file not there yet
             snap["job"] = {"id": ctx["seq"], "name": ctx["name"] or Path(ctx["gcode_file"]).name}
+        if isinstance(snap.get("metrics"), dict):
+            snap["metrics"]["hint"] = "by the job's timing, put right at each layer, %, fan and AMS change"
         return snap
 
     # ------------------------------------------------------------------ the file a running print used
@@ -524,33 +527,24 @@ class BambuPrinter(BasePrinter):
         self._reject_req = (job, str(e))          # handled by the poll thread (_fetch_status)
 
     # ------------------------------------------------------------------ estimate
-    def _estimate(self, gs: str, layer, percent, remaining_min):
-        """Where the print is between the marks the printer reports, moved on by time."""
+    def _estimate(self, gs: str, p: dict):
+        """Where the print is: the job's own timing between the printer's reports (TimeEstimate)."""
         now = time.time()
-        mark = (layer, percent)
-        if mark != self._mark:
-            self._mark, self._mark_t, self._paused_for = mark, now, 0.0
-        paused = gs == "PAUSE"
-        if paused:
-            self._paused_for += self.poll_s                  # time stands still while paused
-        elif gs != "RUNNING":
-            return
-        if percent is None:
-            return
-        left = 100.0 - percent
-        per_percent = (remaining_min * 60.0 / left) if remaining_min and left > 0 else None
-        # paused: only where the reported marks put it (a model loaded during the pause shows that)
-        frac = 0.0 if paused or not per_percent else (now - self._mark_t - self._paused_for) / per_percent
+        ams = p.get("ams") if isinstance(p.get("ams"), dict) else {}
         sample = None
         with self.lock:
             tr = self.tracker
-            if tr and self.job and self._ctx and self.job.get("id") == self._ctx["seq"]:
-                before = tr.printed
-                p = tr.estimate(int(layer) if layer else None, percent, frac)
+            if not (tr and self.job and self._ctx and self.job.get("id") == self._ctx["seq"]):
+                return
+            est = self._est
+            if est is None or est.tp is not tr.tp:
+                est = self._est = TimeEstimate(tr.tp)
+            got = est.update(now, gs, _num(p.get("layer_num")), _num(p.get("mc_percent")),
+                             _num(p.get("mc_remaining_time")), _num(p.get("spd_mag")), p, ams.get("tray_now"))
+            if got and tr.at_time(*got) and tr.nozzle:
                 self.last_pos_wall = now
-                if p > before and tr.nozzle:
-                    x, y, z = tr.nozzle
-                    sample = [round(now * 1000, 1), round(x, 3), round(y, 3), round(z, 3), round(p, 3)]
+                x, y, z = tr.nozzle
+                sample = [round(now * 1000, 1), round(x, 3), round(y, 3), round(z, 3), round(tr.printed, 3)]
         if sample:
             self.publish("pos", {"s": [sample], "key": self.tp_key})
 
