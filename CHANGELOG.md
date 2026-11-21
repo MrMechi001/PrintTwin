@@ -10,7 +10,7 @@
 * A print queue in the 3D view.
 * Setup page in the browser, Windows package.
 
-## Unreleased
+## 0.9.0 – Control your printer
 
 * **Printer control in the 3D view** (opt-in, `[control] enabled = true`): pause, resume and stop
   the print, print a file from the printer again (newest first), upload a file and print it.
