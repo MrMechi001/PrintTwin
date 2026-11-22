@@ -10,7 +10,7 @@
 * A print queue in the 3D view.
 * Setup page in the browser, Windows package.
 
-## Unreleased
+## 0.9.1 – Bambu Lab nozzle follows the job's timing
 
 * **Bambu Lab: the nozzle moves like the real one.** The position (Bambu printers report none) now
   follows the job's own timing – feed rates, accelerations, slowing down at corners, travels –
